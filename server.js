@@ -24,6 +24,8 @@ const LIMITS = {
   OWNER: { messages: Infinity, images: Infinity, files: Infinity }
 };
 
+app.set("trust proxy", 1);
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "20mb" }));
 
@@ -77,7 +79,7 @@ db.exec(`
 `);
 
 function hasColumn(table, column) {
-  return db.prepare(`PRAGMA table_info(${table})`)
+  return db.prepare(\`PRAGMA table_info(\${table})\`)
     .all()
     .some(item => item.name === column);
 }
@@ -95,11 +97,11 @@ if (!hasColumn("users", "is_blocked")) {
 }
 
 // Автоматически назначаем OWNER нужному аккаунту.
-db.prepare(`
+db.prepare(\`
   UPDATE users
   SET role = 'OWNER'
   WHERE email = ? COLLATE NOCASE
-`).run(OWNER_EMAIL);
+\`).run(OWNER_EMAIL);
 
 function usageDate() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -155,25 +157,31 @@ function cookieToken(req) {
 }
 
 // Установка защищённой cookie для HTTPS.
-function setSessionCookie(res, token) {
-  const secure = process.env.NODE_ENV === "production"
-    ? "; Secure"
-    : "";
+function isHttpsRequest(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  return req.secure || forwardedProto === "https" ||
+    process.env.NODE_ENV === "production";
+}
+
+function setSessionCookie(res, token, req) {
+  const secure = isHttpsRequest(req) ? "; Secure" : "";
 
   res.setHeader(
     "Set-Cookie",
-    `pinsk_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`
+    \`pinsk_session=\${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000\${secure}\`
   );
 }
 
-function clearSessionCookie(res) {
-  const secure = process.env.NODE_ENV === "production"
-    ? "; Secure"
-    : "";
+function clearSessionCookie(res, req) {
+  const secure = isHttpsRequest(req) ? "; Secure" : "";
 
   res.setHeader(
     "Set-Cookie",
-    `pinsk_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`
+    \`pinsk_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0\${secure}\`
   );
 }
 
@@ -196,24 +204,24 @@ function auth(req, res, next) {
     });
   }
 
-  const session = db.prepare(`
+  const session = db.prepare(\`
     SELECT user_id FROM sessions
     WHERE token_hash = ? AND expires_at > ?
-  `).get(hashToken(token), Date.now());
+  \`).get(hashToken(token), Date.now());
 
   if (!session) {
-    clearSessionCookie(res);
+    clearSessionCookie(res, req);
 
     return res.status(401).json({
       error: "Сессия истекла. Войди снова."
     });
   }
 
-  const user = db.prepare(`
+  const user = db.prepare(\`
     SELECT id, name, email, role, created_at, is_blocked
     FROM users
     WHERE id = ?
-  `).get(session.user_id);
+  \`).get(session.user_id);
 
   if (!user) {
     return res.status(401).json({
@@ -225,7 +233,7 @@ function auth(req, res, next) {
     db.prepare("DELETE FROM sessions WHERE user_id = ?")
       .run(user.id);
 
-    clearSessionCookie(res);
+    clearSessionCookie(res, req);
 
     return res.status(403).json({
       error: "Аккаунт заблокирован администратором."
@@ -246,16 +254,16 @@ function requireOwner(req, res, next) {
   next();
 }
 
-function issueSession(user, res) {
+function issueSession(user, res, req) {
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
-  db.prepare(`
+  db.prepare(\`
     INSERT INTO sessions (token_hash, user_id, expires_at)
     VALUES (?, ?, ?)
-  `).run(hashToken(token), user.id, expiresAt);
+  \`).run(hashToken(token), user.id, expiresAt);
 
-  setSessionCookie(res, token);
+  setSessionCookie(res, token, req);
 }
 
 // РЕГИСТРАЦИЯ
@@ -271,7 +279,7 @@ app.post("/api/auth/register", (req, res) => {
       });
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
       return res.status(400).json({
         error: "Введи правильный email."
       });
@@ -290,21 +298,20 @@ app.post("/api/auth/register", (req, res) => {
     }
 
     const id = crypto.randomUUID();
-
     const role = email === OWNER_EMAIL ? "OWNER" : "FREE";
 
-    db.prepare(`
+    db.prepare(\`
       INSERT INTO users (id, name, email, password_hash, role)
       VALUES (?, ?, ?, ?, ?)
-    `).run(id, name, email, makePasswordHash(password), role);
+    \`).run(id, name, email, makePasswordHash(password), role);
 
-    const user = db.prepare(`
+    const user = db.prepare(\`
       SELECT id, name, email, role, created_at
       FROM users
       WHERE id = ?
-    `).get(id);
+    \`).get(id);
 
-    issueSession(user, res);
+    issueSession(user, res, req);
 
     res.json({
       success: true,
@@ -344,15 +351,15 @@ app.post("/api/auth/login", (req, res) => {
 
     // Дополнительная проверка владельца.
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
-      db.prepare(`
+      db.prepare(\`
         UPDATE users SET role = 'OWNER'
         WHERE id = ?
-      `).run(user.id);
+      \`).run(user.id);
 
       user.role = "OWNER";
     }
 
-    issueSession(user, res);
+    issueSession(user, res, req);
 
     res.json({
       success: true,
@@ -380,26 +387,26 @@ app.post("/api/auth/logout", (req, res) => {
   const token = cookieToken(req);
 
   if (token) {
-    db.prepare(`
+    db.prepare(\`
       DELETE FROM sessions
       WHERE token_hash = ?
-    `).run(hashToken(token));
+    \`).run(hashToken(token));
   }
 
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
 
   res.json({ success: true });
 });
 
 // УДАЛЕНИЕ ПРОСРОЧЕННЫХ СЕССИЙ
-db.prepare(`
+db.prepare(\`
   DELETE FROM sessions
   WHERE expires_at <= ?
-`).run(Date.now());
+\`).run(Date.now());
 
 // АДМИН-ПАНЕЛЬ: СТАТИСТИКА
 app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
-  const stats = db.prepare(`
+  const stats = db.prepare(\`
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN role = 'FREE' THEN 1 ELSE 0 END) AS free,
@@ -407,7 +414,7 @@ app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
       SUM(CASE WHEN role = 'OWNER' THEN 1 ELSE 0 END) AS owners,
       SUM(CASE WHEN is_blocked = 1 THEN 1 ELSE 0 END) AS blocked
     FROM users
-  `).get();
+  \`).get();
 
   res.json(stats);
 });
@@ -416,13 +423,13 @@ app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
 app.get("/api/admin/users", auth, requireOwner, (req, res) => {
   const search = String(req.query.search || "").trim();
 
-  const users = db.prepare(`
+  const users = db.prepare(\`
     SELECT id, name, email, role, is_blocked, created_at
     FROM users
     WHERE name LIKE ? OR email LIKE ?
     ORDER BY created_at DESC
     LIMIT 200
-  `).all(`%${search}%`, `%${search}%`);
+  \`).all(\`%\${search}%\`, \`%\${search}%\`);
 
   res.json(users);
 });
@@ -476,14 +483,14 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   }
 
   const set = Object.keys(updates)
-    .map(key => `${key} = @${key}`)
+    .map(key => \`\${key} = @\${key}\`)
     .join(", ");
 
-  db.prepare(`
+  db.prepare(\`
     UPDATE users
-    SET ${set}
+    SET \${set}
     WHERE id = @id
-  `).run({
+  \`).run({
     ...updates,
     id
   });
@@ -493,11 +500,11 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
       .run(id);
   }
 
-  const updated = db.prepare(`
+  const updated = db.prepare(\`
     SELECT id, name, email, role, is_blocked, created_at
     FROM users
     WHERE id = ?
-  `).get(id);
+  \`).get(id);
 
   res.json({
     success: true,
@@ -507,11 +514,11 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
 
 // ИСПОЛЬЗОВАНИЕ И ЛИМИТЫ
 function getUsage(userId) {
-  return db.prepare(`
+  return db.prepare(\`
     SELECT messages, images, files
     FROM daily_usage
     WHERE user_id = ? AND usage_date = ?
-  `).get(userId, usageDate()) || {
+  \`).get(userId, usageDate()) || {
     messages: 0,
     images: 0,
     files: 0
@@ -526,26 +533,26 @@ const reserveMessage = db.transaction(userId => {
     return false;
   }
 
-  db.prepare(`
+  db.prepare(\`
     INSERT INTO daily_usage
       (user_id, usage_date, messages, images, files)
     VALUES (?, ?, 1, 0, 0)
     ON CONFLICT(user_id, usage_date)
     DO UPDATE SET messages = messages + 1
-  `).run(userId, date);
+  \`).run(userId, date);
 
   return true;
 });
 
 function releaseMessage(userId) {
-  db.prepare(`
+  db.prepare(\`
     UPDATE daily_usage
     SET messages = CASE
       WHEN messages > 0 THEN messages - 1
       ELSE 0
     END
     WHERE user_id = ? AND usage_date = ?
-  `).run(userId, usageDate());
+  \`).run(userId, usageDate());
 }
 
 function limitsFor(user) {
@@ -605,20 +612,20 @@ app.get("/api/usage", auth, (req, res) => {
 
 // ИСТОРИЯ ЧАТОВ
 app.get("/api/history", auth, (req, res) => {
-  res.json(db.prepare(`
+  res.json(db.prepare(\`
     SELECT id, title, created_at
     FROM conversations
     WHERE user_id = ?
     ORDER BY created_at DESC
-  `).all(req.user.id));
+  \`).all(req.user.id));
 });
 
 app.get("/api/history/:id", auth, (req, res) => {
-  const conversation = db.prepare(`
+  const conversation = db.prepare(\`
     SELECT id
     FROM conversations
     WHERE id = ? AND user_id = ?
-  `).get(req.params.id, req.user.id);
+  \`).get(req.params.id, req.user.id);
 
   if (!conversation) {
     return res.status(404).json({
@@ -626,12 +633,12 @@ app.get("/api/history/:id", auth, (req, res) => {
     });
   }
 
-  res.json(db.prepare(`
+  res.json(db.prepare(\`
     SELECT role, content, created_at
     FROM messages
     WHERE conversation_id = ?
     ORDER BY id ASC
-  `).all(req.params.id));
+  \`).all(req.params.id));
 });
 
 // ПАМЯТЬ
@@ -644,10 +651,10 @@ app.post("/api/memory", auth, (req, res) => {
     });
   }
 
-  const result = db.prepare(`
+  const result = db.prepare(\`
     INSERT INTO memories (user_id, content)
     VALUES (?, ?)
-  `).run(req.user.id, content);
+  \`).run(req.user.id, content);
 
   res.json({
     success: true,
@@ -656,19 +663,19 @@ app.post("/api/memory", auth, (req, res) => {
 });
 
 app.get("/api/memory", auth, (req, res) => {
-  res.json(db.prepare(`
+  res.json(db.prepare(\`
     SELECT id, content, created_at
     FROM memories
     WHERE user_id = ?
     ORDER BY id DESC
-  `).all(req.user.id));
+  \`).all(req.user.id));
 });
 
 app.delete("/api/memory/:id", auth, (req, res) => {
-  db.prepare(`
+  db.prepare(\`
     DELETE FROM memories
     WHERE id = ? AND user_id = ?
-  `).run(req.params.id, req.user.id);
+  \`).run(req.params.id, req.user.id);
 
   res.json({ success: true });
 });
@@ -729,19 +736,19 @@ app.post("/api/chat", auth, async (req, res) => {
       }
     }
 
-    let conversation = db.prepare(`
+    let conversation = db.prepare(\`
       SELECT id, user_id
       FROM conversations
       WHERE id = ?
-    `).get(conversationId);
+    \`).get(conversationId);
 
     if (conversation && conversation.user_id !== userId) {
       if (conversation.user_id === null) {
-        db.prepare(`
+        db.prepare(\`
           UPDATE conversations
           SET user_id = ?
           WHERE id = ?
-        `).run(userId, conversationId);
+        \`).run(userId, conversationId);
       } else {
         if (reserved) releaseMessage(userId);
 
@@ -752,38 +759,38 @@ app.post("/api/chat", auth, async (req, res) => {
     }
 
     if (!conversation) {
-      db.prepare(`
+      db.prepare(\`
         INSERT INTO conversations (id, title, user_id)
         VALUES (?, ?, ?)
-      `).run(
+      \`).run(
         conversationId,
         message.slice(0, 60),
         userId
       );
     }
 
-    db.prepare(`
+    db.prepare(\`
       INSERT INTO messages (conversation_id, role, content)
       VALUES (?, 'user', ?)
-    `).run(conversationId, message);
+    \`).run(conversationId, message);
 
-    const recentMessages = db.prepare(`
+    const recentMessages = db.prepare(\`
       SELECT role, content
       FROM messages
       WHERE conversation_id = ?
       ORDER BY id DESC
       LIMIT 15
-    `).all(conversationId).reverse();
+    \`).all(conversationId).reverse();
 
-    const savedMemories = db.prepare(`
+    const savedMemories = db.prepare(\`
       SELECT content
       FROM memories
       WHERE user_id = ?
       ORDER BY id DESC
       LIMIT 50
-    `).all(userId);
+    \`).all(userId);
 
-    const oldMessages = db.prepare(`
+    const oldMessages = db.prepare(\`
       SELECT m.content
       FROM messages m
       JOIN conversations c
@@ -793,12 +800,12 @@ app.post("/api/chat", auth, async (req, res) => {
         AND m.role = 'user'
       ORDER BY m.id DESC
       LIMIT 30
-    `).all(userId, conversationId);
+    \`).all(userId, conversationId);
 
     const context = [
       ...savedMemories.map(item => item.content),
       ...oldMessages.map(item => item.content)
-    ].join("\n");
+    ].join("\\n");
 
     const response = await ai.chat.completions.create({
       model: MODEL,
@@ -809,8 +816,8 @@ app.post("/api/chat", auth, async (req, res) => {
             "Ты Pinsk — самостоятельный ИИ-ассистент. " +
             "Отвечай полезно, честно и на языке пользователя. " +
             "Используй контекст памяти, если он помогает. " +
-            "Не выдумывай воспоминания.\n\n" +
-            "ПАМЯТЬ И ПРОШЛЫЕ РАЗГОВОРЫ:\n" +
+            "Не выдумывай воспоминания.\\n\\n" +
+            "ПАМЯТЬ И ПРОШЛЫЕ РАЗГОВОРЫ:\\n" +
             context.slice(0, 12000)
         },
         ...recentMessages
@@ -821,10 +828,10 @@ app.post("/api/chat", auth, async (req, res) => {
       response.choices[0]?.message?.content ||
       "Не удалось получить ответ.";
 
-    db.prepare(`
+    db.prepare(\`
       INSERT INTO messages (conversation_id, role, content)
       VALUES (?, 'assistant', ?)
-    `).run(conversationId, answer);
+    \`).run(conversationId, answer);
 
     const usage = getUsage(userId);
 
@@ -876,7 +883,7 @@ app.listen(PORT, () => {
   console.log("================================");
   console.log("       PINSK AI SERVER");
   console.log("================================");
-  console.log(`Сервер запущен: http://localhost:${PORT}`);
+  console.log(\`Сервер запущен: http://localhost:\${PORT}\`);
   console.log("Gemini:", MODEL);
   console.log("OWNER:", OWNER_EMAIL);
   console.log("FREE: 100 сообщений в день");
