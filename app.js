@@ -59,7 +59,7 @@ function toast(message) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await window.fetch.call(window, url, {
     credentials: "include",
     ...options,
     headers: {
