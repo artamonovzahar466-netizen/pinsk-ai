@@ -19,8 +19,7 @@ const STORAGE = {
 
 function readStorage(key, fallback = []) {
   try {
-    const value = JSON.parse(localStorage.getItem(key));
-    return value ?? fallback;
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
   } catch {
     return fallback;
   }
@@ -37,10 +36,7 @@ let usageData = null;
 let isSending = false;
 let language = localStorage.getItem(STORAGE.language) || "ru";
 let recognition = null;
-
-/* =========================================
-   УТИЛИТЫ
-   ========================================= */
+let selectedAnalysisFile = null;
 
 function saveLocal() {
   localStorage.setItem(STORAGE.chats, JSON.stringify(chats));
@@ -86,7 +82,7 @@ function isOwner() {
 }
 
 /* =========================================
-   ОБРАБОТКА МАТЕМАТИЧЕСКИХ ФОРМУЛ
+   МАТЕМАТИКА
    ========================================= */
 
 function cleanMath(value) {
@@ -130,13 +126,13 @@ function cleanMath(value) {
     "=": "⁼", "(": "⁽", ")": "⁾"
   };
 
-  text = text.replace(/\^\{([^{}]+)\}/g, (_, value) => {
-    return [...value].map(char => superscripts[char] || char).join("");
-  });
+  text = text.replace(/\^\{([^{}]+)\}/g, (_, value) =>
+    [...value].map(char => superscripts[char] || char).join("")
+  );
 
-  text = text.replace(/\^([0-9])/g, (_, value) => {
-    return superscripts[value] || value;
-  });
+  text = text.replace(/\^([0-9])/g, (_, value) =>
+    superscripts[value] || value
+  );
 
   const subscripts = {
     "0": "₀", "1": "₁", "2": "₂", "3": "₃",
@@ -144,13 +140,13 @@ function cleanMath(value) {
     "8": "₈", "9": "₉", "+": "₊", "-": "₋"
   };
 
-  text = text.replace(/_\{([^{}]+)\}/g, (_, value) => {
-    return [...value].map(char => subscripts[char] || char).join("");
-  });
+  text = text.replace(/_\{([^{}]+)\}/g, (_, value) =>
+    [...value].map(char => subscripts[char] || char).join("")
+  );
 
-  text = text.replace(/_([0-9])/g, (_, value) => {
-    return subscripts[value] || value;
-  });
+  text = text.replace(/_([0-9])/g, (_, value) =>
+    subscripts[value] || value
+  );
 
   text = text.replace(/\\(mathrm|mathbf|mathit|mathbb|left|right)\b/g, "");
   text = text.replace(/\\,/g, " ");
@@ -180,8 +176,7 @@ function renderInlineMarkdown(value) {
 }
 
 function renderMarkdown(value) {
-  const source = String(value ?? "").replace(/\r\n/g, "\n");
-  const lines = source.split("\n");
+  const lines = String(value ?? "").replace(/\r\n/g, "\n").split("\n");
 
   let html = "";
   let paragraph = [];
@@ -192,21 +187,18 @@ function renderMarkdown(value) {
 
   function closeParagraph() {
     if (!paragraph.length) return;
-
     html += `<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`;
     paragraph = [];
   }
 
   function closeList() {
     if (!listType) return;
-
     html += listType === "ul" ? "</ul>" : "</ol>";
     listType = null;
   }
 
   function closeCode() {
     if (!inCode) return;
-
     html += `<pre><code class="language-${escapeHTML(codeLanguage)}">${escapeHTML(codeLines.join("\n"))}</code></pre>`;
     codeLines = [];
     codeLanguage = "";
@@ -226,7 +218,6 @@ function renderMarkdown(value) {
         inCode = true;
         codeLanguage = fence[1] || "text";
       }
-
       continue;
     }
 
@@ -273,8 +264,7 @@ function renderMarkdown(value) {
         html += nextType === "ul" ? "<ul>" : "<ol>";
       }
 
-      const item = unordered ? unordered[1] : ordered[1];
-      html += `<li>${renderInlineMarkdown(item)}</li>`;
+      html += `<li>${renderInlineMarkdown(unordered ? unordered[1] : ordered[1])}</li>`;
       continue;
     }
 
@@ -308,12 +298,7 @@ async function api(url, options = {}) {
       }
     });
   } catch (error) {
-    console.error("Pinsk connection error:", error);
-
-    const connectionError = new Error(
-      "Не удалось подключиться к серверу."
-    );
-
+    const connectionError = new Error("Не удалось подключиться к серверу.");
     connectionError.status = 0;
     throw connectionError;
   }
@@ -324,20 +309,15 @@ async function api(url, options = {}) {
   if (contentType.includes("application/json")) {
     data = await response.json().catch(() => ({}));
   } else {
-    const responseText = await response.text().catch(() => "");
     data = {
-      error: responseText || "Неверный ответ сервера."
+      error: await response.text().catch(() => "Неверный ответ сервера.")
     };
   }
 
   if (!response.ok) {
-    const error = new Error(
-      data.error || `Ошибка ${response.status}`
-    );
-
+    const error = new Error(data.error || `Ошибка ${response.status}`);
     error.status = response.status;
     error.data = data;
-
     throw error;
   }
 
@@ -398,9 +378,7 @@ function showAuth(mode = "login") {
 
       <p class="auth-switch">
         ${register ? "Уже есть аккаунт?" : "Нет аккаунта?"}
-        <a href="#" id="authSwitch">
-          ${register ? "Войти" : "Регистрация"}
-        </a>
+        <a href="#" id="authSwitch">${register ? "Войти" : "Регистрация"}</a>
       </p>
     </div>
   `);
@@ -439,9 +417,7 @@ function showAuth(mode = "login") {
         }
       );
 
-      if (!data.user) {
-        throw new Error("Сервер не вернул данные пользователя.");
-      }
+      if (!data.user) throw new Error("Сервер не вернул пользователя.");
 
       currentUser = data.user;
 
@@ -452,14 +428,17 @@ function showAuth(mode = "login") {
       await loadHistory();
 
       renderPage("chat");
-      toast("Добро пожаловать в Pinsk!");
+
+      toast(
+        currentUser.role === "OWNER"
+          ? "Добро пожаловать, владелец Pinsk!"
+          : "Добро пожаловать в Pinsk!"
+      );
 
     } catch (err) {
       error.textContent = err.message;
       button.disabled = false;
-      button.textContent = register
-        ? "Зарегистрироваться"
-        : "Войти";
+      button.textContent = register ? "Зарегистрироваться" : "Войти";
     }
   };
 
@@ -493,7 +472,7 @@ async function checkAuth() {
     if (error.status === 403) {
       currentUser = null;
       updateProfile();
-      toast(error.message || "Доступ к аккаунту ограничен.");
+      toast(error.message);
       return false;
     }
 
@@ -503,9 +482,7 @@ async function checkAuth() {
 
 async function logout() {
   try {
-    await api("/api/auth/logout", {
-      method: "POST"
-    });
+    await api("/api/auth/logout", { method: "POST" });
   } catch (error) {
     console.error(error);
   }
@@ -519,20 +496,15 @@ async function logout() {
 }
 
 /* =========================================
-   ПРОФИЛЬ
+   ПРОФИЛЬ И OWNER
    ========================================= */
 
 function updateProfile() {
   const name = currentUser?.name || "Гость";
-  const role = currentUser?.role || "FREE";
+  const role = String(currentUser?.role || "FREE").toUpperCase();
 
-  if ($("profileName")) {
-    $("profileName").textContent = name;
-  }
-
-  if ($("avatar")) {
-    $("avatar").textContent = name.charAt(0).toUpperCase();
-  }
+  if ($("profileName")) $("profileName").textContent = name;
+  if ($("avatar")) $("avatar").textContent = name.charAt(0).toUpperCase();
 
   if ($("profileButton")) {
     $("profileButton").title = currentUser
@@ -557,20 +529,14 @@ function updateProfile() {
       "Бесплатный план";
   }
 
-  if (isOwner()) {
-    addAdminNavigation();
-  } else {
-    removeAdminNavigation();
-  }
+  if (isOwner()) addAdminNavigation();
+  else removeAdminNavigation();
 }
 
 function showProfile() {
-  if (!currentUser) {
-    showAuth("login");
-    return;
-  }
+  if (!currentUser) return showAuth("login");
 
-  const role = currentUser.role || "FREE";
+  const role = String(currentUser.role || "FREE").toUpperCase();
 
   showModal(`
     <div class="profile-modal">
@@ -578,11 +544,7 @@ function showProfile() {
       <h3>${escapeHTML(currentUser.name)}</h3>
       <p>${escapeHTML(currentUser.email)}</p>
       <p>Тариф: ${escapeHTML(role)}</p>
-      ${
-        role === "OWNER"
-          ? "<p>Владелец Pinsk AI. Доступ без ограничений.</p>"
-          : ""
-      }
+      ${role === "OWNER" ? "<p>Владелец Pinsk AI. Полный доступ без ограничений.</p>" : ""}
       <button class="secondary-button" id="profilePlans">Тарифы</button>
       <button class="secondary-button" id="profileLogout">Выйти</button>
     </div>
@@ -600,52 +562,77 @@ function showProfile() {
    ТАРИФЫ
    ========================================= */
 
-function showPlans() {
-  renderPage("plans");
-}
-
 function renderPlans() {
   const page = getPageView();
   if (!page) return;
 
-  const owner = isOwner();
-
   page.innerHTML = `
     <div class="page-content">
       <h2>Тарифы Pinsk</h2>
+      <p>Выбери подходящий план для работы с Pinsk AI.</p>
 
-      ${
-        owner
-          ? `
-            <div class="dashboard-card">
-              <h3>OWNER</h3>
-              <h2>Без ограничений</h2>
-              <p>Аккаунт создателя Pinsk AI.</p>
-              <p>Полный доступ к возможностям платформы.</p>
-            </div>
-          `
-          : ""
-      }
+      ${isOwner() ? `
+        <div class="dashboard-card">
+          <h3>OWNER — Владелец</h3>
+          <h2>Без ограничений</h2>
+          <p>Полный доступ ко всем функциям платформы.</p>
+          <ul>
+            <li>Безлимитные сообщения</li>
+            <li>Безлимитные файлы и изображения</li>
+            <li>Админ-панель и управление пользователями</li>
+            <li>Все возможности Pinsk PRO</li>
+          </ul>
+        </div>
+      ` : ""}
 
-      <div class="dashboard-card">
-        <h3>FREE</h3>
-        <h2>Бесплатно</h2>
-        <p>100 сообщений в день.</p>
+      <div class="dashboard-grid">
+        <div class="dashboard-card">
+          <h3>FREE</h3>
+          <h2>Бесплатно</h2>
+          <p>Для знакомства с Pinsk AI.</p>
+          <ul>
+            <li>100 сообщений в день</li>
+            <li>5 изображений в день</li>
+            <li>5 файлов в день</li>
+            <li>История чатов</li>
+            <li>Базовый ИИ-ассистент</li>
+            <li>Проекты и библиотека</li>
+          </ul>
+          <p><strong>Стоимость: 0 ₸</strong></p>
+        </div>
+
+        <div class="dashboard-card">
+          <h3>Pinsk PRO</h3>
+          <h2>2 990 ₸ / месяц</h2>
+          <p>Для расширенной работы с ИИ.</p>
+          <ul>
+            <li>Безлимитные сообщения</li>
+            <li>Безлимитные файлы</li>
+            <li>Безлимитная генерация изображений при подключении модели</li>
+            <li>Проекты и библиотека</li>
+            <li>Глубокое рассуждение</li>
+            <li>Голосовое общение</li>
+            <li>Расширенные инструменты</li>
+          </ul>
+          <p><strong>2 990 ₸ в месяц</strong></p>
+        </div>
+
+        <div class="dashboard-card">
+          <h3>Pinsk PRO — годовой</h3>
+          <h2>30 498 ₸ / год</h2>
+          <p>Экономия 15% по сравнению с оплатой за каждый месяц.</p>
+          <ul>
+            <li>Все возможности PRO</li>
+            <li>Оплата за год</li>
+            <li>Выгоднее месячного плана</li>
+          </ul>
+          <p><strong>30 498 ₸ в год</strong></p>
+        </div>
       </div>
 
-      <div class="dashboard-card">
-        <h3>Pinsk PRO</h3>
-        <h2>2 990 ₸ / месяц</h2>
-        <p>Расширенные возможности.</p>
-      </div>
-
-      <div class="dashboard-card">
-        <h3>Pinsk PRO годовой</h3>
-        <h2>30 498 ₸ / год</h2>
-        <p>Скидка 15%.</p>
-      </div>
-
-      <p>Оплата пока не подключена.</p>
+      <p class="muted-text">
+        Подключение оплаты пока не настроено. Тарифы отображают запланированные возможности.
+      </p>
     </div>
   `;
 }
@@ -688,13 +675,8 @@ function renderUsage() {
 function newChat() {
   currentChatId = null;
 
-  if ($("messages")) {
-    $("messages").innerHTML = "";
-  }
-
-  if ($("prompt")) {
-    $("prompt").value = "";
-  }
+  if ($("messages")) $("messages").innerHTML = "";
+  if ($("prompt")) $("prompt").value = "";
 
   renderPage("chat");
 }
@@ -727,11 +709,8 @@ function renderMessage(role, content) {
 
   body.append(title, text);
 
-  if (isUser) {
-    item.append(body);
-  } else {
-    item.append(avatar, body);
-  }
+  if (isUser) item.append(body);
+  else item.append(avatar, body);
 
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
@@ -742,11 +721,9 @@ async function loadHistory() {
 
   try {
     const result = await api("/api/history");
-
     chats = Array.isArray(result) ? result : [];
     saveLocal();
     renderHistory();
-
   } catch (error) {
     console.error("History:", error);
   }
@@ -760,13 +737,10 @@ function renderHistory() {
 
   chats.forEach(chat => {
     const button = document.createElement("button");
-
     button.className = "history-item";
     button.textContent = chat.title || "Новый чат";
 
-    if (chat.id === currentChatId) {
-      button.classList.add("active");
-    }
+    if (chat.id === currentChatId) button.classList.add("active");
 
     button.addEventListener("click", () => openChat(chat.id));
     container.appendChild(button);
@@ -774,29 +748,20 @@ function renderHistory() {
 }
 
 async function openChat(id) {
-  if (!currentUser) {
-    showAuth("login");
-    return;
-  }
+  if (!currentUser) return showAuth("login");
 
   try {
-    const result = await api(
-      `/api/history/${encodeURIComponent(id)}`
-    );
+    const result = await api(`/api/history/${encodeURIComponent(id)}`);
 
     currentChatId = id;
 
-    if ($("messages")) {
-      $("messages").innerHTML = "";
-    }
+    if ($("messages")) $("messages").innerHTML = "";
 
     const messages = Array.isArray(result)
       ? result
       : result.messages || [];
 
-    messages.forEach(message => {
-      renderMessage(message.role, message.content);
-    });
+    messages.forEach(message => renderMessage(message.role, message.content));
 
     renderHistory();
     renderPage("chat");
@@ -807,11 +772,7 @@ async function openChat(id) {
 }
 
 async function sendMessage(value, options = {}) {
-  if (!currentUser) {
-    showAuth("login");
-    return;
-  }
-
+  if (!currentUser) return showAuth("login");
   if (isSending) return;
 
   const message = String(value || "").trim();
@@ -820,22 +781,15 @@ async function sendMessage(value, options = {}) {
   isSending = true;
 
   const sendButton = $("sendButton");
-
-  if (sendButton) {
-    sendButton.disabled = true;
-  }
+  if (sendButton) sendButton.disabled = true;
 
   if (currentPage === "chat" && $("welcome")) {
     $("welcome").style.display = "none";
   }
 
-  if (options.voice !== true) {
-    renderMessage("user", message);
-  }
+  renderMessage("user", message);
 
-  if ($("prompt")) {
-    $("prompt").value = "";
-  }
+  if ($("prompt")) $("prompt").value = "";
 
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
@@ -845,12 +799,7 @@ async function sendMessage(value, options = {}) {
   loadingText.textContent = "Pinsk думает...";
 
   loading.appendChild(loadingText);
-
-  if (options.voice === true && $("voiceStatus")) {
-    $("voiceStatus").textContent = "Pinsk думает...";
-  } else {
-    $("messages")?.appendChild(loading);
-  }
+  $("messages")?.appendChild(loading);
 
   try {
     const data = await api("/api/chat", {
@@ -862,44 +811,24 @@ async function sendMessage(value, options = {}) {
     });
 
     currentChatId = data.conversationId || currentChatId;
-
     loading.remove();
 
     const answer = data.answer || "Нет ответа.";
+    renderMessage("assistant", answer);
 
-    if (options.voice === true) {
-      if ($("voiceStatus")) {
-        $("voiceStatus").textContent = answer;
-      }
-
-      speakAnswer(answer);
-
-    } else {
-      renderMessage("assistant", answer);
-    }
+    if (options.speak) speakAnswer(answer);
 
     await loadUsage();
     await loadHistory();
 
   } catch (error) {
     loading.remove();
-
-    if (options.voice === true) {
-      if ($("voiceStatus")) {
-        $("voiceStatus").textContent = "Ошибка: " + error.message;
-      }
-    } else {
-      renderMessage("assistant", "Ошибка: " + error.message);
-    }
-
+    renderMessage("assistant", "Ошибка: " + error.message);
     toast(error.message);
 
   } finally {
     isSending = false;
-
-    if (sendButton) {
-      sendButton.disabled = false;
-    }
+    if (sendButton) sendButton.disabled = false;
   }
 }
 
@@ -926,9 +855,7 @@ function getPageView() {
 function renderPage(page) {
   closeModal();
 
-  if (currentPage === "voice" && page !== "voice") {
-    stopVoice();
-  }
+  if (currentPage === "voice" && page !== "voice") stopVoice();
 
   if (page === "admin" && !isOwner()) {
     toast("Доступ к админ-панели разрешён только владельцу.");
@@ -938,10 +865,7 @@ function renderPage(page) {
   currentPage = page;
 
   document.querySelectorAll("[data-page]").forEach(button => {
-    button.classList.toggle(
-      "active",
-      button.dataset.page === page
-    );
+    button.classList.toggle("active", button.dataset.page === page);
   });
 
   const titles = {
@@ -956,9 +880,7 @@ function renderPage(page) {
     admin: "Админ-панель"
   };
 
-  if ($("pageTitle")) {
-    $("pageTitle").textContent = titles[page] || "Pinsk AI";
-  }
+  if ($("pageTitle")) $("pageTitle").textContent = titles[page] || "Pinsk AI";
 
   renderPageContent(page);
   $("sidebar")?.classList.remove("open");
@@ -974,19 +896,9 @@ function renderPageContent(page) {
 
   if (page === "chat") {
     view.style.display = "none";
-
-    if (welcome) {
-      welcome.style.display = currentChatId ? "none" : "";
-    }
-
-    if (messages) {
-      messages.style.display = "flex";
-    }
-
-    if (composer) {
-      composer.style.display = "";
-    }
-
+    if (welcome) welcome.style.display = currentChatId ? "none" : "";
+    if (messages) messages.style.display = "flex";
+    if (composer) composer.style.display = "";
     return;
   }
 
@@ -1000,24 +912,20 @@ function renderPageContent(page) {
     view.innerHTML = `
       <div class="page-content">
         <h2>Обзор Pinsk</h2>
-
         <div class="dashboard-grid">
           <div class="dashboard-card">
             <h3>Аккаунт</h3>
             <p>${escapeHTML(currentUser?.name || "Гость")}</p>
             <p>${escapeHTML(currentUser?.role || "FREE")}</p>
           </div>
-
           <div class="dashboard-card">
             <h3>Проекты</h3>
             <p>${projects.length}</p>
           </div>
-
           <div class="dashboard-card">
             <h3>Библиотека</h3>
             <p>${library.length}</p>
           </div>
-
           <div class="dashboard-card">
             <h3>Использование</h3>
             <div id="usageInfo">Загрузка...</div>
@@ -1025,7 +933,6 @@ function renderPageContent(page) {
         </div>
       </div>
     `;
-
     renderUsage();
     return;
   }
@@ -1034,13 +941,10 @@ function renderPageContent(page) {
     view.innerHTML = `
       <div class="page-content">
         <h2>Мои проекты</h2>
-        <button class="primary-button" id="addProject">
-          + Новый проект
-        </button>
+        <button class="primary-button" id="addProject">+ Новый проект</button>
         <div id="projectsList"></div>
       </div>
     `;
-
     renderProjects();
     $("addProject")?.addEventListener("click", createProject);
     return;
@@ -1050,27 +954,22 @@ function renderPageContent(page) {
     view.innerHTML = `
       <div class="page-content">
         <h2>Библиотека</h2>
-        <button class="primary-button" id="addLibraryItem">
-          + Добавить материал
-        </button>
+        <button class="primary-button" id="addLibraryItem">+ Добавить материал</button>
         <div id="libraryList"></div>
       </div>
     `;
-
     renderLibrary();
     $("addLibraryItem")?.addEventListener("click", addLibraryItem);
     return;
   }
 
-  if (page === "plugins" || page === "analysis") {
-    view.innerHTML = `
-      <div class="page-content">
-        <h2>${page === "plugins" ? "Плагины" : "Анализ данных"}</h2>
-        <div class="dashboard-card">
-          Раздел находится в разработке.
-        </div>
-      </div>
-    `;
+  if (page === "plugins") {
+    renderPlugins();
+    return;
+  }
+
+  if (page === "analysis") {
+    renderAnalysis();
     return;
   }
 
@@ -1079,23 +978,13 @@ function renderPageContent(page) {
       <div class="page-content voice-page">
         <h2>Голосовой режим</h2>
         <p>Общайся с Pinsk голосом.</p>
-
         <div class="voice-controls">
-          <button class="primary-button" id="voiceStart">
-            🎙 Начать разговор
-          </button>
-
-          <button class="secondary-button" id="voiceStop">
-            Остановить
-          </button>
+          <button class="primary-button" id="voiceStart">🎙 Начать разговор</button>
+          <button class="secondary-button" id="voiceStop">Остановить</button>
         </div>
-
-        <div class="voice-status" id="voiceStatus">
-          Готов к разговору.
-        </div>
+        <div class="voice-status" id="voiceStatus">Готов к разговору.</div>
       </div>
     `;
-
     $("voiceStart")?.addEventListener("click", startVoice);
     $("voiceStop")?.addEventListener("click", stopVoice);
     return;
@@ -1119,6 +1008,145 @@ function renderPageContent(page) {
 }
 
 /* =========================================
+   ПЛАГИНЫ
+   ========================================= */
+
+async function renderPlugins() {
+  const view = getPageView();
+  if (!view) return;
+
+  view.innerHTML = `
+    <div class="page-content">
+      <h2>Плагины Pinsk</h2>
+      <p>Дополнительные инструменты и интеграции.</p>
+      <div id="pluginsList">Загрузка списка...</div>
+    </div>
+  `;
+
+  const container = $("pluginsList");
+
+  try {
+    const result = await api("/api/plugins");
+    const plugins = result.plugins || [];
+
+    container.innerHTML = plugins.map(plugin => `
+      <div class="dashboard-card">
+        <h3>${escapeHTML(plugin.name)}</h3>
+        <p>${escapeHTML(plugin.description)}</p>
+        <p class="plugin-status">
+          ${plugin.status === "available" ? "Доступен" : "Требуется подключение"}
+        </p>
+      </div>
+    `).join("");
+
+  } catch (error) {
+    container.textContent = "Не удалось загрузить каталог: " + error.message;
+  }
+}
+
+/* =========================================
+   АНАЛИЗ ДАННЫХ
+   ========================================= */
+
+function renderAnalysis() {
+  const view = getPageView();
+  if (!view) return;
+
+  view.innerHTML = `
+    <div class="page-content">
+      <h2>Анализ данных</h2>
+      <p>Загрузи CSV, TXT или JSON-файл и задай вопрос по его содержимому.</p>
+
+      <div class="dashboard-card">
+        <label for="analysisFile">Выбрать файл</label>
+        <input
+          type="file"
+          id="analysisFile"
+          accept=".csv,.txt,.json,.md"
+        >
+
+        <p id="analysisFileName">Файл не выбран.</p>
+
+        <label for="analysisQuestion">Что нужно проанализировать?</label>
+        <textarea
+          id="analysisQuestion"
+          rows="4"
+          placeholder="Например: найди закономерности, посчитай итоги и сделай выводы."
+        ></textarea>
+
+        <button class="primary-button" id="runAnalysis">
+          Проанализировать
+        </button>
+
+        <div id="analysisResult" class="analysis-result"></div>
+      </div>
+    </div>
+  `;
+
+  $("analysisFile")?.addEventListener("change", event => {
+    selectedAnalysisFile = event.target.files?.[0] || null;
+
+    $("analysisFileName").textContent = selectedAnalysisFile
+      ? `Выбран файл: ${selectedAnalysisFile.name}`
+      : "Файл не выбран.";
+  });
+
+  $("runAnalysis")?.addEventListener("click", runAnalysis);
+}
+
+async function runAnalysis() {
+  if (!currentUser) return showAuth("login");
+
+  const file = selectedAnalysisFile;
+  const question = $("analysisQuestion")?.value.trim() ||
+    "Проанализируй данные и сделай выводы.";
+
+  const result = $("analysisResult");
+  const button = $("runAnalysis");
+
+  if (!file) {
+    toast("Сначала выбери файл.");
+    return;
+  }
+
+  const allowed = /\.(csv|txt|json|md)$/i.test(file.name);
+
+  if (!allowed) {
+    toast("Пока поддерживаются CSV, TXT, JSON и MD.");
+    return;
+  }
+
+  if (file.size > 2 * 1024 * 1024) {
+    toast("Размер файла не должен превышать 2 МБ.");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Анализирую...";
+  result.textContent = "Pinsk анализирует файл...";
+
+  try {
+    const content = await file.text();
+
+    const data = await api("/api/analysis", {
+      method: "POST",
+      body: JSON.stringify({
+        content,
+        question
+      })
+    });
+
+    result.innerHTML = renderMarkdown(data.answer || "Нет результата.");
+
+  } catch (error) {
+    result.textContent = "Ошибка анализа: " + error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Проанализировать";
+  }
+}
+
+/* =========================================
    ПРОЕКТЫ
    ========================================= */
 
@@ -1131,10 +1159,7 @@ function renderProjects() {
       <div class="dashboard-card">
         <h3>${escapeHTML(project.name)}</h3>
         <p>${escapeHTML(project.description || "")}</p>
-        <button
-          class="secondary-button"
-          data-delete-project="${escapeHTML(project.id)}"
-        >
+        <button class="secondary-button" data-delete-project="${escapeHTML(project.id)}">
           Удалить
         </button>
       </div>
@@ -1143,10 +1168,7 @@ function renderProjects() {
 
   container.querySelectorAll("[data-delete-project]").forEach(button => {
     button.addEventListener("click", () => {
-      projects = projects.filter(
-        item => item.id !== button.dataset.deleteProject
-      );
-
+      projects = projects.filter(item => item.id !== button.dataset.deleteProject);
       saveLocal();
       renderProjects();
     });
@@ -1158,25 +1180,16 @@ function createProject() {
     <h2>Новый проект</h2>
     <input id="projectName" placeholder="Название">
     <textarea id="projectDescription" placeholder="Описание"></textarea>
-    <button class="primary-button" id="saveProject">
-      Создать
-    </button>
+    <button class="primary-button" id="saveProject">Создать</button>
   `);
 
   $("saveProject").onclick = () => {
     const name = $("projectName").value.trim();
     const description = $("projectDescription").value.trim();
 
-    if (!name) {
-      return toast("Введи название проекта.");
-    }
+    if (!name) return toast("Введи название проекта.");
 
-    projects.push({
-      id: makeId(),
-      name,
-      description
-    });
-
+    projects.push({ id: makeId(), name, description });
     saveLocal();
     closeModal();
     renderProjects();
@@ -1197,10 +1210,7 @@ function renderLibrary() {
       <div class="dashboard-card">
         <h3>${escapeHTML(item.title)}</h3>
         <p>${escapeHTML(item.content)}</p>
-        <button
-          class="secondary-button"
-          data-delete-library="${escapeHTML(item.id)}"
-        >
+        <button class="secondary-button" data-delete-library="${escapeHTML(item.id)}">
           Удалить
         </button>
       </div>
@@ -1209,10 +1219,7 @@ function renderLibrary() {
 
   container.querySelectorAll("[data-delete-library]").forEach(button => {
     button.addEventListener("click", () => {
-      library = library.filter(
-        item => item.id !== button.dataset.deleteLibrary
-      );
-
+      library = library.filter(item => item.id !== button.dataset.deleteLibrary);
       saveLocal();
       renderLibrary();
     });
@@ -1224,25 +1231,16 @@ function addLibraryItem() {
     <h2>Добавить материал</h2>
     <input id="libraryTitle" placeholder="Название">
     <textarea id="libraryContent" placeholder="Текст"></textarea>
-    <button class="primary-button" id="saveLibrary">
-      Сохранить
-    </button>
+    <button class="primary-button" id="saveLibrary">Сохранить</button>
   `);
 
   $("saveLibrary").onclick = () => {
     const title = $("libraryTitle").value.trim();
     const content = $("libraryContent").value.trim();
 
-    if (!title || !content) {
-      return toast("Заполни оба поля.");
-    }
+    if (!title || !content) return toast("Заполни оба поля.");
 
-    library.push({
-      id: makeId(),
-      title,
-      content
-    });
-
+    library.push({ id: makeId(), title, content });
     saveLocal();
     closeModal();
     renderLibrary();
@@ -1256,31 +1254,23 @@ function addLibraryItem() {
 
 function addAdminNavigation() {
   if (!isOwner()) return;
+  if (document.querySelector('[data-page="admin"]')) return;
 
-  if (document.querySelector('[data-page="admin"]')) {
-    return;
-  }
-
-  const nav = document.querySelector(
-    "#sidebar .navigation"
-  ) || document.querySelector(".navigation");
+  const nav = document.querySelector("#sidebar .navigation") ||
+    document.querySelector(".navigation");
 
   if (!nav) {
-    console.warn("Pinsk: не найдена навигация для админ-панели.");
+    console.warn("Pinsk: не найдена навигация.");
     return;
   }
 
   const button = document.createElement("button");
-
   button.type = "button";
   button.dataset.page = "admin";
   button.className = "nav-item";
   button.textContent = "⚙ Админ-панель";
 
-  button.addEventListener("click", () => {
-    renderPage("admin");
-  });
-
+  button.addEventListener("click", () => renderPage("admin"));
   nav.appendChild(button);
 }
 
@@ -1295,7 +1285,7 @@ async function renderAdmin() {
   if (!isOwner()) {
     view.innerHTML = `
       <div class="page-content">
-        <h2>Доступ запрещён.</h2>
+        <h2>Доступ запрещён</h2>
         <p>Этот раздел доступен только владельцу Pinsk AI.</p>
       </div>
     `;
@@ -1305,25 +1295,11 @@ async function renderAdmin() {
   view.innerHTML = `
     <div class="page-content admin-page">
       <h2>Админ-панель Pinsk</h2>
-
-      <div class="dashboard-grid" id="adminStats">
-        Загрузка...
-      </div>
-
+      <div class="dashboard-grid" id="adminStats">Загрузка...</div>
       <h3>Пользователи</h3>
-
-      <input
-        id="adminSearch"
-        placeholder="Поиск пользователей"
-      >
-
-      <button class="secondary-button" id="adminRefresh">
-        Обновить
-      </button>
-
-      <div id="adminUsersList">
-        Загрузка...
-      </div>
+      <input id="adminSearch" placeholder="Поиск пользователей">
+      <button class="secondary-button" id="adminRefresh">Обновить</button>
+      <div id="adminUsersList">Загрузка...</div>
     </div>
   `;
 
@@ -1344,38 +1320,18 @@ async function renderAdmin() {
 async function loadAdminStats() {
   try {
     const stats = await api("/api/admin/stats");
-
     const container = $("adminStats");
     if (!container) return;
 
     container.innerHTML = `
-      <div class="dashboard-card">
-        <h3>Пользователи</h3>
-        <h2>${Number(stats.total || 0)}</h2>
-      </div>
-
-      <div class="dashboard-card">
-        <h3>FREE</h3>
-        <h2>${Number(stats.free || 0)}</h2>
-      </div>
-
-      <div class="dashboard-card">
-        <h3>PRO</h3>
-        <h2>${Number(stats.pro || 0)}</h2>
-      </div>
-
-      <div class="dashboard-card">
-        <h3>Заблокировано</h3>
-        <h2>${Number(stats.blocked || 0)}</h2>
-      </div>
+      <div class="dashboard-card"><h3>Пользователи</h3><h2>${Number(stats.total || 0)}</h2></div>
+      <div class="dashboard-card"><h3>FREE</h3><h2>${Number(stats.free || 0)}</h2></div>
+      <div class="dashboard-card"><h3>PRO</h3><h2>${Number(stats.pro || 0)}</h2></div>
+      <div class="dashboard-card"><h3>OWNER</h3><h2>${Number(stats.owners || 0)}</h2></div>
+      <div class="dashboard-card"><h3>Заблокировано</h3><h2>${Number(stats.blocked || 0)}</h2></div>
     `;
-
   } catch (error) {
-    const container = $("adminStats");
-
-    if (container) {
-      container.textContent = error.message;
-    }
+    if ($("adminStats")) $("adminStats").textContent = error.message;
   }
 }
 
@@ -1390,9 +1346,7 @@ async function loadAdminUsers() {
       "/api/admin/users?search=" + encodeURIComponent(search)
     );
 
-    const users = Array.isArray(result)
-      ? result
-      : result.users || [];
+    const users = Array.isArray(result) ? result : result.users || [];
 
     if (!users.length) {
       container.innerHTML = "<p>Пользователи не найдены.</p>";
@@ -1404,25 +1358,24 @@ async function loadAdminUsers() {
         <h3>${escapeHTML(user.name)}</h3>
         <p>${escapeHTML(user.email)}</p>
         <p>Тариф: ${escapeHTML(user.role)}</p>
-        <p>Статус: ${
-          user.is_blocked ? "Заблокирован" : "Активен"
-        }</p>
+        <p>Статус: ${user.is_blocked ? "Заблокирован" : "Активен"}</p>
       </div>
     `).join("");
 
   } catch (error) {
-    container.innerHTML = `
-      <p>${escapeHTML(error.message)}</p>
-    `;
+    container.textContent = error.message;
   }
 }
 
 /* =========================================
-   ГОЛОСОВОЙ РЕЖИМ
+   ГОЛОС
    ========================================= */
 
 function speakAnswer(text) {
-  if (!("speechSynthesis" in window)) return;
+  if (!("speechSynthesis" in window)) {
+    toast("Озвучивание не поддерживается браузером.");
+    return;
+  }
 
   window.speechSynthesis.cancel();
 
@@ -1432,23 +1385,9 @@ function speakAnswer(text) {
     .replace(/\[(.*?)\]\(.*?\)/g, "$1");
 
   const utterance = new SpeechSynthesisUtterance(cleanText);
-
   utterance.lang = language === "en" ? "en-US" : "ru-RU";
   utterance.rate = 1;
   utterance.pitch = 1;
-
-  utterance.onend = () => {
-    if (currentPage === "voice" && $("voiceStatus")) {
-      $("voiceStatus").textContent = "Готов слушать.";
-    }
-  };
-
-  utterance.onerror = () => {
-    if ($("voiceStatus")) {
-      $("voiceStatus").textContent =
-        "Не удалось озвучить ответ.";
-    }
-  };
 
   window.speechSynthesis.speak(utterance);
 }
@@ -1462,10 +1401,7 @@ function startVoice() {
     return;
   }
 
-  if (!currentUser) {
-    showAuth("login");
-    return;
-  }
+  if (!currentUser) return showAuth("login");
 
   stopVoice();
 
@@ -1475,34 +1411,32 @@ function startVoice() {
   recognition.interimResults = false;
 
   recognition.onstart = () => {
-    if ($("voiceStatus")) {
-      $("voiceStatus").textContent = "Слушаю тебя...";
-    }
+    const status = $("voiceStatus");
+    if (status) status.textContent = "Слушаю тебя...";
+    $("voiceButton")?.classList.add("recording");
   };
 
   recognition.onresult = event => {
     const spokenText = event.results[0][0].transcript;
 
-    if ($("voiceStatus")) {
-      $("voiceStatus").textContent = "Ты: " + spokenText;
-    }
+    if ($("prompt")) $("prompt").value = spokenText;
 
-    sendMessage(spokenText, { voice: true });
+    sendMessage(spokenText, { speak: true });
   };
 
   recognition.onerror = event => {
     console.error("Voice recognition:", event.error);
 
-    if ($("voiceStatus")) {
-      $("voiceStatus").textContent =
-        event.error === "not-allowed"
-          ? "Разреши доступ к микрофону в браузере."
-          : "Ошибка распознавания речи.";
+    if (event.error === "not-allowed") {
+      toast("Разреши доступ к микрофону в браузере.");
+    } else {
+      toast("Ошибка распознавания речи.");
     }
   };
 
   recognition.onend = () => {
     recognition = null;
+    $("voiceButton")?.classList.remove("recording");
   };
 
   try {
@@ -1522,7 +1456,7 @@ function stopVoice() {
       recognition.onend = null;
       recognition.stop();
     } catch (error) {
-      console.warn("Voice stop:", error);
+      console.warn(error);
     }
 
     recognition = null;
@@ -1532,9 +1466,38 @@ function stopVoice() {
     window.speechSynthesis.cancel();
   }
 
+  $("voiceButton")?.classList.remove("recording");
+
   if ($("voiceStatus")) {
-    $("voiceStatus").textContent =
-      "Голосовой режим остановлен.";
+    $("voiceStatus").textContent = "Голосовой режим остановлен.";
+  }
+}
+
+function installVoiceButton() {
+  const form = $("chatForm");
+  const prompt = $("prompt");
+
+  if (!form || !prompt || $("voiceButton")) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "voiceButton";
+  button.className = "voice-inline-button";
+  button.title = "Голосовой ввод";
+  button.setAttribute("aria-label", "Голосовой ввод");
+  button.textContent = "🎙";
+
+  button.addEventListener("click", () => {
+    if (recognition) stopVoice();
+    else startVoice();
+  });
+
+  const sendButton = $("sendButton");
+
+  if (sendButton && sendButton.parentElement === form) {
+    form.insertBefore(button, sendButton);
+  } else {
+    form.appendChild(button);
   }
 }
 
@@ -1547,38 +1510,22 @@ function showSettings() {
     <h2>Настройки Pinsk</h2>
 
     <label>Язык</label>
-
     <select id="languageSelect">
-      <option value="ru" ${
-        language === "ru" ? "selected" : ""
-      }>Русский</option>
-
-      <option value="en" ${
-        language === "en" ? "selected" : ""
-      }>English</option>
+      <option value="ru" ${language === "ru" ? "selected" : ""}>Русский</option>
+      <option value="en" ${language === "en" ? "selected" : ""}>English</option>
     </select>
 
     <label>
-      <input
-        type="checkbox"
-        id="reasoningToggle"
-        ${
-          localStorage.getItem(STORAGE.reasoning) === "true"
-            ? "checked"
-            : ""
-        }
-      >
+      <input type="checkbox" id="reasoningToggle"
+        ${localStorage.getItem(STORAGE.reasoning) === "true" ? "checked" : ""}>
       Глубокое рассуждение
     </label>
 
-    <button class="primary-button" id="saveSettings">
-      Сохранить
-    </button>
+    <button class="primary-button" id="saveSettings">Сохранить</button>
   `);
 
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
-
     localStorage.setItem(STORAGE.language, language);
 
     localStorage.setItem(
@@ -1610,46 +1557,33 @@ function initEvents() {
 
   $("newChat")?.addEventListener("click", newChat);
   $("profileButton")?.addEventListener("click", showProfile);
-  $("upgradeButton")?.addEventListener("click", showPlans);
-  $("topUpgrade")?.addEventListener("click", showPlans);
+  $("upgradeButton")?.addEventListener("click", () => renderPage("plans"));
+  $("topUpgrade")?.addEventListener("click", () => renderPage("plans"));
   $("settingsButton")?.addEventListener("click", showSettings);
   $("modalClose")?.addEventListener("click", closeModal);
 
   $("modalBackdrop")?.addEventListener("click", event => {
-    if (event.target === $("modalBackdrop")) {
-      closeModal();
-    }
+    if (event.target === $("modalBackdrop")) closeModal();
   });
 
   document.querySelectorAll("[data-page]").forEach(button => {
-    button.addEventListener("click", () => {
-      renderPage(button.dataset.page);
-    });
+    button.addEventListener("click", () => renderPage(button.dataset.page));
   });
 
   $("welcome")?.addEventListener("click", event => {
     const item = event.target.closest("[data-prompt]");
-
-    if (item) {
-      sendMessage(item.dataset.prompt);
-    }
+    if (item) sendMessage(item.dataset.prompt);
   });
 
   $("reasoningButton")?.addEventListener("click", () => {
-    const enabled =
-      localStorage.getItem(STORAGE.reasoning) !== "true";
+    const enabled = localStorage.getItem(STORAGE.reasoning) !== "true";
 
-    localStorage.setItem(
-      STORAGE.reasoning,
-      String(enabled)
-    );
-
+    localStorage.setItem(STORAGE.reasoning, String(enabled));
     $("reasoningButton")?.classList.toggle("active", enabled);
 
-    toast(
-      enabled
-        ? "Глубокое мышление включено."
-        : "Глубокое мышление выключено."
+    toast(enabled
+      ? "Глубокое мышление включено."
+      : "Глубокое мышление выключено."
     );
   });
 
@@ -1659,10 +1593,7 @@ function initEvents() {
 
   $("fileInput")?.addEventListener("change", () => {
     const file = $("fileInput")?.files?.[0];
-
-    if (file) {
-      toast("Выбран файл: " + file.name);
-    }
+    if (file) toast("Выбран файл: " + file.name);
   });
 
   $("mobileMenu")?.addEventListener("click", () => {
@@ -1671,14 +1602,13 @@ function initEvents() {
 }
 
 /* =========================================
-   ОФОРМЛЕНИЕ КНОПОК И ПОЛЕЙ
+   СТИЛИ
    ========================================= */
 
 function installPinskUiFixes() {
   if ($("pinskUiFixes")) return;
 
   const style = document.createElement("style");
-
   style.id = "pinskUiFixes";
 
   style.textContent = `
@@ -1726,10 +1656,7 @@ function installPinskUiFixes() {
       font: inherit;
       font-weight: 650;
       cursor: pointer;
-      transition:
-        background .2s,
-        border-color .2s,
-        transform .2s;
+      transition: background .2s, border-color .2s, transform .2s;
     }
 
     .primary-button {
@@ -1816,6 +1743,74 @@ function installPinskUiFixes() {
     .owner-badge {
       color: #f0d28b;
     }
+
+    .voice-inline-button {
+      width: 42px;
+      height: 42px;
+      flex: 0 0 42px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #514875;
+      border-radius: 12px;
+      color: #e8e4ff;
+      background: #292638;
+      font-size: 19px;
+      cursor: pointer;
+      margin: 0 6px;
+    }
+
+    .voice-inline-button:hover {
+      background: #39324f;
+      border-color: #8b78ff;
+    }
+
+    .voice-inline-button.recording {
+      background: #713b55;
+      border-color: #ff759d;
+      animation: pinskPulse 1.2s infinite;
+    }
+
+    @keyframes pinskPulse {
+      50% { box-shadow: 0 0 0 5px #ff759d33; }
+    }
+
+    .analysis-result {
+      margin-top: 18px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
+    }
+
+    .analysis-result pre {
+      overflow-x: auto;
+      padding: 12px;
+      background: #111116;
+      border-radius: 9px;
+    }
+
+    .plugin-status {
+      color: #b5a8ff;
+      font-size: 13px;
+    }
+
+    .page-content textarea {
+      display: block;
+      width: 100%;
+      min-height: 100px;
+      margin: 10px 0;
+      padding: 12px;
+      color: #f2f2f5;
+      background: #111116;
+      border: 1px solid #3b3949;
+      border-radius: 9px;
+      resize: vertical;
+    }
+
+    .page-content input[type="file"] {
+      display: block;
+      margin: 12px 0;
+      color: #f2f2f5;
+    }
   `;
 
   document.head.appendChild(style);
@@ -1830,6 +1825,7 @@ async function init() {
 
   installPinskUiFixes();
   initEvents();
+  installVoiceButton();
   updateProfile();
 
   const authResult = await checkAuth();
@@ -1843,10 +1839,7 @@ async function init() {
     showAuth("login");
 
   } else {
-    toast(
-      "Не удалось проверить вход. Сервер временно недоступен. Попробуй обновить страницу позже."
-    );
-
+    toast("Сервер временно недоступен. Попробуй обновить страницу.");
     renderPage("chat");
   }
 
