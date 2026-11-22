@@ -33,6 +33,7 @@ let currentPage = "chat";
 let usageData = null;
 let isSending = false;
 let language = localStorage.getItem(STORAGE.language) || "ru";
+let recognition = null;
 
 /* =========================================
    УТИЛИТЫ
@@ -78,6 +79,133 @@ function makeId() {
 }
 
 /* =========================================
+   MARKDOWN
+   ========================================= */
+
+function renderInlineMarkdown(value) {
+  let text = escapeHTML(value);
+
+  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/__(.+?)__/g, "<strong>$1</strong>");
+  text = text.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
+  text = text.replace(/(?<!_)_([^_\n]+)_(?!_)/g, "<em>$1</em>");
+  text = text.replace(/~~(.+?)~~/g, "<del>$1</del>");
+
+  return text;
+}
+
+function renderMarkdown(value) {
+  const source = String(value ?? "").replace(/\r\n/g, "\n");
+  const lines = source.split("\n");
+
+  let html = "";
+  let paragraph = [];
+  let listType = null;
+  let codeLines = [];
+  let inCode = false;
+  let codeLanguage = "";
+
+  function closeParagraph() {
+    if (!paragraph.length) return;
+
+    html += `<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`;
+    paragraph = [];
+  }
+
+  function closeList() {
+    if (!listType) return;
+
+    html += listType === "ul" ? "</ul>" : "</ol>";
+    listType = null;
+  }
+
+  function closeCode() {
+    if (!inCode) return;
+
+    html += `<pre><code class="language-${escapeHTML(codeLanguage)}">${escapeHTML(codeLines.join("\n"))}</code></pre>`;
+    codeLines = [];
+    codeLanguage = "";
+    inCode = false;
+  }
+
+  for (const line of lines) {
+    const fence = line.match(/^```([\w-]*)\s*$/);
+
+    if (fence) {
+      closeParagraph();
+      closeList();
+
+      if (inCode) {
+        closeCode();
+      } else {
+        inCode = true;
+        codeLanguage = fence[1] || "text";
+      }
+
+      continue;
+    }
+
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeParagraph();
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+
+    if (heading) {
+      closeParagraph();
+      closeList();
+
+      const level = heading[1].length;
+      html += `<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`;
+      continue;
+    }
+
+    if (/^[-*_]{3,}$/.test(line.trim())) {
+      closeParagraph();
+      closeList();
+      html += "<hr>";
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+
+    if (unordered || ordered) {
+      closeParagraph();
+
+      const nextType = unordered ? "ul" : "ol";
+
+      if (listType !== nextType) {
+        closeList();
+        listType = nextType;
+        html += nextType === "ul" ? "<ul>" : "<ol>";
+      }
+
+      const item = unordered ? unordered[1] : ordered[1];
+      html += `<li>${renderInlineMarkdown(item)}</li>`;
+      continue;
+    }
+
+    closeList();
+    paragraph.push(line);
+  }
+
+  closeParagraph();
+  closeList();
+  closeCode();
+
+  return html || "";
+}
+
+/* =========================================
    API
    ========================================= */
 
@@ -106,8 +234,8 @@ async function api(url, options = {}) {
   if (contentType.includes("application/json")) {
     data = await response.json().catch(() => ({}));
   } else {
-    const text = await response.text().catch(() => "");
-    data = { error: text || "Неверный ответ сервера." };
+    const responseText = await response.text().catch(() => "");
+    data = { error: responseText || "Неверный ответ сервера." };
   }
 
   if (!response.ok) {
@@ -287,6 +415,7 @@ function updateProfile() {
   if (badge) badge.textContent = role;
 
   const description = document.querySelector(".profile-info small");
+
   if (description) {
     description.textContent =
       role === "OWNER" ? "Владелец" :
@@ -333,6 +462,7 @@ function showPlans() {
 
 function renderPlans() {
   const page = getPageView();
+
   page.innerHTML = `
     <div class="page-content">
       <h2>Тарифы Pinsk</h2>
@@ -393,8 +523,10 @@ function renderUsage() {
 
 function newChat() {
   currentChatId = null;
+
   if ($("messages")) $("messages").innerHTML = "";
   if ($("prompt")) $("prompt").value = "";
+
   renderPage("chat");
 }
 
@@ -402,20 +534,36 @@ function renderMessage(role, content) {
   const messages = $("messages");
   if (!messages) return;
 
+  const isUser = role === "user";
+
   const item = document.createElement("div");
-  item.className = role === "user"
+  item.className = isUser
     ? "message user-message"
     : "message assistant-message";
 
-  const title = document.createElement("div");
-  title.className = "message-author";
-  title.textContent = role === "user" ? "Вы" : "Pinsk";
+  const avatar = document.createElement("div");
+  avatar.className = "message-avatar";
+  avatar.textContent = isUser ? "" : "P";
 
   const body = document.createElement("div");
   body.className = "message-content";
-  body.textContent = content;
 
-  item.append(title, body);
+  const title = document.createElement("div");
+  title.className = "message-author";
+  title.textContent = isUser ? "Вы" : "Pinsk";
+
+  const text = document.createElement("div");
+  text.className = "message-text";
+  text.innerHTML = renderMarkdown(content);
+
+  body.append(title, text);
+
+  if (isUser) {
+    item.append(body);
+  } else {
+    item.append(avatar, body);
+  }
+
   messages.appendChild(item);
   messages.scrollTop = messages.scrollHeight;
 }
@@ -443,6 +591,11 @@ function renderHistory() {
     const button = document.createElement("button");
     button.className = "history-item";
     button.textContent = chat.title || "Новый чат";
+
+    if (chat.id === currentChatId) {
+      button.classList.add("active");
+    }
+
     button.addEventListener("click", () => openChat(chat.id));
     container.appendChild(button);
   });
@@ -457,18 +610,26 @@ async function openChat(id) {
     );
 
     currentChatId = id;
-    $("messages").innerHTML = "";
 
-    (Array.isArray(result) ? result : result.messages || [])
-      .forEach(message => renderMessage(message.role, message.content));
+    if ($("messages")) $("messages").innerHTML = "";
 
+    const messages = Array.isArray(result)
+      ? result
+      : result.messages || [];
+
+    messages.forEach(message => {
+      renderMessage(message.role, message.content);
+    });
+
+    renderHistory();
     renderPage("chat");
+
   } catch (error) {
     toast(error.message);
   }
 }
 
-async function sendMessage(value) {
+async function sendMessage(value, options = {}) {
   if (!currentUser) return showAuth();
   if (isSending) return;
 
@@ -480,15 +641,30 @@ async function sendMessage(value) {
   const sendButton = $("sendButton");
   if (sendButton) sendButton.disabled = true;
 
-  if ($("welcome")) $("welcome").style.display = "none";
+  if (currentPage === "chat" && $("welcome")) {
+    $("welcome").style.display = "none";
+  }
 
-  renderMessage("user", message);
+  if (options.voice !== true) {
+    renderMessage("user", message);
+  }
+
   if ($("prompt")) $("prompt").value = "";
 
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
-  loading.textContent = "Pinsk думает...";
-  $("messages")?.appendChild(loading);
+
+  const loadingText = document.createElement("div");
+  loadingText.className = "message-content";
+  loadingText.textContent = "Pinsk думает...";
+
+  loading.appendChild(loadingText);
+
+  if (options.voice === true && $("voiceStatus")) {
+    $("voiceStatus").textContent = "Pinsk думает...";
+  } else {
+    $("messages")?.appendChild(loading);
+  }
 
   try {
     const data = await api("/api/chat", {
@@ -500,17 +676,37 @@ async function sendMessage(value) {
     });
 
     currentChatId = data.conversationId || currentChatId;
+
     loading.remove();
 
-    renderMessage("assistant", data.answer || "Нет ответа.");
+    const answer = data.answer || "Нет ответа.";
+
+    if (options.voice === true) {
+      if ($("voiceStatus")) {
+        $("voiceStatus").textContent = answer;
+      }
+
+      speakAnswer(answer);
+    } else {
+      renderMessage("assistant", answer);
+    }
 
     await loadUsage();
     await loadHistory();
 
   } catch (error) {
     loading.remove();
-    renderMessage("assistant", "Ошибка: " + error.message);
+
+    if (options.voice === true) {
+      if ($("voiceStatus")) {
+        $("voiceStatus").textContent = "Ошибка: " + error.message;
+      }
+    } else {
+      renderMessage("assistant", "Ошибка: " + error.message);
+    }
+
     toast(error.message);
+
   } finally {
     isSending = false;
     if (sendButton) sendButton.disabled = false;
@@ -538,10 +734,8 @@ function getPageView() {
 }
 
 function renderPage(page) {
-  // Закрываем модальные окна при переходе между разделами.
   closeModal();
 
-  // Останавливаем голосовой режим при выходе из него.
   if (currentPage === "voice" && page !== "voice") {
     stopVoice();
   }
@@ -582,9 +776,14 @@ function renderPageContent(page) {
 
   if (page === "chat") {
     view.style.display = "none";
-    if (welcome) welcome.style.display = currentChatId ? "none" : "";
-    if (messages) messages.style.display = "";
+
+    if (welcome) {
+      welcome.style.display = currentChatId ? "none" : "";
+    }
+
+    if (messages) messages.style.display = "flex";
     if (composer) composer.style.display = "";
+
     return;
   }
 
@@ -619,6 +818,7 @@ function renderPageContent(page) {
         </div>
       </div>
     `;
+
     renderUsage();
     return;
   }
@@ -631,6 +831,7 @@ function renderPageContent(page) {
         <div id="projectsList"></div>
       </div>
     `;
+
     renderProjects();
     $("addProject")?.addEventListener("click", createProject);
     return;
@@ -644,6 +845,7 @@ function renderPageContent(page) {
         <div id="libraryList"></div>
       </div>
     `;
+
     renderLibrary();
     $("addLibraryItem")?.addEventListener("click", addLibraryItem);
     return;
@@ -661,13 +863,26 @@ function renderPageContent(page) {
 
   if (page === "voice") {
     view.innerHTML = `
-      <div class="page-content">
+      <div class="page-content voice-page">
         <h2>Голосовой режим</h2>
-        <button class="primary-button" id="voiceStart">🎙 Начать разговор</button>
-        <button class="secondary-button" id="voiceStop">Остановить</button>
-        <p id="voiceStatus">Готов.</p>
+        <p>Общайся с Pinsk голосом.</p>
+
+        <div class="voice-controls">
+          <button class="primary-button" id="voiceStart">
+            🎙 Начать разговор
+          </button>
+
+          <button class="secondary-button" id="voiceStop">
+            Остановить
+          </button>
+        </div>
+
+        <div class="voice-status" id="voiceStatus">
+          Готов к разговору.
+        </div>
       </div>
     `;
+
     $("voiceStart")?.addEventListener("click", startVoice);
     $("voiceStop")?.addEventListener("click", stopVoice);
     return;
@@ -903,10 +1118,39 @@ async function loadAdminUsers() {
 }
 
 /* =========================================
-   ГОЛОС
+   ГОЛОСОВОЙ РЕЖИМ
    ========================================= */
 
-let recognition = null;
+function speakAnswer(text) {
+  if (!("speechSynthesis" in window)) return;
+
+  window.speechSynthesis.cancel();
+
+  const cleanText = String(text)
+    .replace(/```[\s\S]*?```/g, "Блок кода.")
+    .replace(/[#*_`~]/g, "")
+    .replace(/\[(.*?)\]\(.*?\)/g, "$1");
+
+  const utterance = new SpeechSynthesisUtterance(cleanText);
+
+  utterance.lang = language === "en" ? "en-US" : "ru-RU";
+  utterance.rate = 1;
+  utterance.pitch = 1;
+
+  utterance.onend = () => {
+    if (currentPage === "voice" && $("voiceStatus")) {
+      $("voiceStatus").textContent = "Готов слушать.";
+    }
+  };
+
+  utterance.onerror = () => {
+    if ($("voiceStatus")) {
+      $("voiceStatus").textContent = "Не удалось озвучить ответ.";
+    }
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
 
 function startVoice() {
   const SpeechRecognition =
@@ -917,24 +1161,55 @@ function startVoice() {
     return;
   }
 
+  if (!currentUser) {
+    showAuth();
+    return;
+  }
+
+  stopVoice();
+
   recognition = new SpeechRecognition();
   recognition.lang = language === "en" ? "en-US" : "ru-RU";
+  recognition.continuous = false;
+  recognition.interimResults = false;
 
   recognition.onstart = () => {
-    if ($("voiceStatus")) $("voiceStatus").textContent = "Слушаю...";
+    if ($("voiceStatus")) {
+      $("voiceStatus").textContent = "Слушаю тебя...";
+    }
   };
 
   recognition.onresult = event => {
-    const text = event.results[0][0].transcript;
-    if ($("voiceStatus")) $("voiceStatus").textContent = text;
-    sendMessage(text);
+    const spokenText = event.results[0][0].transcript;
+
+    if ($("voiceStatus")) {
+      $("voiceStatus").textContent = "Ты: " + spokenText;
+    }
+
+    sendMessage(spokenText, { voice: true });
   };
 
-  recognition.onerror = () => {
-    if ($("voiceStatus")) $("voiceStatus").textContent = "Ошибка распознавания.";
+  recognition.onerror = event => {
+    console.error("Voice recognition:", event.error);
+
+    if ($("voiceStatus")) {
+      $("voiceStatus").textContent =
+        event.error === "not-allowed"
+          ? "Разреши доступ к микрофону в браузере."
+          : "Ошибка распознавания речи.";
+    }
   };
 
-  recognition.start();
+  recognition.onend = () => {
+    recognition = null;
+  };
+
+  try {
+    recognition.start();
+  } catch (error) {
+    console.error(error);
+    toast("Не удалось запустить микрофон.");
+  }
 }
 
 function stopVoice() {
@@ -943,17 +1218,21 @@ function stopVoice() {
       recognition.onresult = null;
       recognition.onerror = null;
       recognition.onstart = null;
+      recognition.onend = null;
       recognition.stop();
     } catch (error) {
       console.warn("Voice stop:", error);
     }
+
     recognition = null;
   }
 
-  window.speechSynthesis?.cancel();
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
 
   if ($("voiceStatus")) {
-    $("voiceStatus").textContent = "Остановлено.";
+    $("voiceStatus").textContent = "Голосовой режим остановлен.";
   }
 }
 
@@ -979,8 +1258,13 @@ function showSettings() {
 
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
+
     localStorage.setItem(STORAGE.language, language);
-    localStorage.setItem(STORAGE.reasoning, String($("reasoningToggle").checked));
+    localStorage.setItem(
+      STORAGE.reasoning,
+      String($("reasoningToggle").checked)
+    );
+
     closeModal();
     toast("Настройки сохранены.");
   };
@@ -1015,7 +1299,9 @@ function initEvents() {
   });
 
   document.querySelectorAll("[data-page]").forEach(button => {
-    button.addEventListener("click", () => renderPage(button.dataset.page));
+    button.addEventListener("click", () => {
+      renderPage(button.dataset.page);
+    });
   });
 
   $("welcome")?.addEventListener("click", event => {
@@ -1025,12 +1311,20 @@ function initEvents() {
 
   $("reasoningButton")?.addEventListener("click", () => {
     const enabled = localStorage.getItem(STORAGE.reasoning) !== "true";
+
     localStorage.setItem(STORAGE.reasoning, String(enabled));
     $("reasoningButton")?.classList.toggle("active", enabled);
-    toast(enabled ? "Глубокое мышление включено." : "Глубокое мышление выключено.");
+
+    toast(
+      enabled
+        ? "Глубокое мышление включено."
+        : "Глубокое мышление выключено."
+    );
   });
 
-  $("attachButton")?.addEventListener("click", () => $("fileInput")?.click());
+  $("attachButton")?.addEventListener("click", () => {
+    $("fileInput")?.click();
+  });
 
   $("fileInput")?.addEventListener("change", () => {
     const file = $("fileInput")?.files?.[0];
@@ -1050,7 +1344,9 @@ function installPinskUiFixes() {
   if ($("pinskUiFixes")) return;
 
   const style = document.createElement("style");
+
   style.id = "pinskUiFixes";
+
   style.textContent = `
     .auth-box label,
     .profile-modal label {
