@@ -24,7 +24,7 @@ body {
   font-size: 14px;
 }
 
-button, textarea {
+button, textarea, input {
   font: inherit;
 }
 
@@ -86,7 +86,7 @@ button {
   background: #22222b;
   text-align: left;
   font-weight: 600;
-  transition: .2s;
+  transition: 0.2s;
 }
 
 .new-chat:hover, .nav-item:hover, .profile:hover {
@@ -102,7 +102,7 @@ button {
   font-size: 11px;
   font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: .8px;
+  letter-spacing: 0.8px;
   padding: 0 10px;
   margin-bottom: 10px;
 }
@@ -205,7 +205,7 @@ button {
   border-radius: 8px;
   padding: 9px 12px;
   font-weight: 650;
-  transition: .2s;
+  transition: 0.2s;
 }
 
 .upgrade-button {
@@ -366,7 +366,7 @@ button {
   background: #191920;
   border: 1px solid var(--border);
   border-radius: 13px;
-  transition: .2s;
+  transition: 0.2s;
 }
 
 .suggestion:hover {
@@ -533,18 +533,19 @@ button {
   display: none;
 }
 
+/* ИСПРАВЛЕНО: app.js добавляет класс active */
 .modal-backdrop {
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 1000;
   align-items: center;
   justify-content: center;
   padding: 20px;
   background: #000000a8;
 }
 
-.modal-backdrop.show {
+.modal-backdrop.active {
   display: flex;
 }
 
@@ -633,7 +634,7 @@ button {
   border-radius: 10px;
   opacity: 0;
   pointer-events: none;
-  transition: .25s;
+  transition: 0.25s;
   max-width: calc(100% - 30px);
   text-align: center;
 }
@@ -690,7 +691,7 @@ button {
     left: -280px;
     top: 0;
     bottom: 0;
-    transition: left .25s;
+    transition: left 0.25s;
     box-shadow: 15px 0 50px #00000060;
   }
 
