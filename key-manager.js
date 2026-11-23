@@ -1,3 +1,4 @@
+
 "use strict";
 
 const crypto = require("crypto");
@@ -83,10 +84,6 @@ function initGeminiKeysTable(db) {
     ["cooldown_until", "DATETIME"],
     ["lease_until", "DATETIME"],
     ["lease_token", "TEXT"],
-
-    // ВАЖНО:
-    // При ALTER TABLE нельзя использовать
-    // DEFAULT CURRENT_TIMESTAMP для старой таблицы.
     ["created_at", "DATETIME"]
   ];
 
@@ -98,7 +95,6 @@ function initGeminiKeysTable(db) {
     }
   }
 
-  // Заполняем created_at у старых записей.
   db.exec(`
     UPDATE gemini_keys
     SET created_at = CURRENT_TIMESTAMP
@@ -307,6 +303,8 @@ function getNextApiKey(db, excludedIds = []) {
 
   const leaseToken = crypto.randomUUID();
 
+  // ИСПРАВЛЕНО:
+  // Создаём функцию транзакции, не запускаем её сразу.
   const transaction = db.transaction(() => {
     let query = `
       SELECT *
@@ -369,12 +367,13 @@ function getNextApiKey(db, excludedIds = []) {
       ...row,
       leaseToken
     };
-  }).immediate();
+  });
 
   let leased = null;
 
   for (let attempt = 0; attempt < 3 && !leased; attempt++) {
-    leased = transaction();
+    // Запускаем транзакцию здесь.
+    leased = transaction.immediate();
   }
 
   if (!leased) {
@@ -464,6 +463,8 @@ function recordKeyResultAndRelease(
 
   const nowIso = new Date().toISOString();
 
+  // ИСПРАВЛЕНО:
+  // Создаём функцию транзакции отдельно.
   const transaction = db.transaction(() => {
     const current = db.prepare(`
       SELECT lease_token, lease_until
@@ -549,9 +550,10 @@ function recordKeyResultAndRelease(
     }
 
     return result.changes === 1;
-  }).immediate();
+  });
 
-  return transaction();
+  // Запускаем транзакцию и возвращаем её результат.
+  return transaction.immediate();
 }
 
 function isNetworkOrTransientError(error) {
@@ -800,9 +802,6 @@ async function executeWithKeyRotation(
       }
     }
 
-    // Пользователь отменил запрос.
-    // Освобождаем только собственную аренду
-    // после завершения API-вызова.
     if (
       externalSignal &&
       externalSignal.aborted
@@ -818,7 +817,6 @@ async function executeWithKeyRotation(
       );
     }
 
-    // Ошибка самой базы данных.
     if (heartbeatError) {
       releaseKeyLease(
         db,
@@ -829,8 +827,6 @@ async function executeWithKeyRotation(
       throw heartbeatError;
     }
 
-    // Другой запрос уже получил эту аренду.
-    // Нельзя записывать результат старого запроса.
     if (leaseLost) {
       lastSafeError =
         "Key lease was lost. Trying another key.";
@@ -838,7 +834,6 @@ async function executeWithKeyRotation(
       continue;
     }
 
-    // API вернул успех.
     if (!apiError) {
       const successRecorded = recordKeyResultAndRelease(
         db,
@@ -857,8 +852,6 @@ async function executeWithKeyRotation(
       return result;
     }
 
-    // Если API завершился с ошибкой, но аренда уже
-    // принадлежит другому запросу, не изменяем её.
     if (
       apiError.code === "KEY_LEASE_LOST" ||
       apiError.message === "KEY_LEASE_LOST"
