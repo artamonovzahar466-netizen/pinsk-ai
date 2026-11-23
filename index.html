@@ -1,148 +1,97 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#101014">
-  <meta name="description" content="Pinsk AI — интеллектуальный помощник">
+  <meta name="description" content="Pinsk AI — интеллектуальный ИИ-ассистент">
   <title>Pinsk AI</title>
-  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="icon" href="/favicon.png">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app">
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
-
+  <div id="app">
     <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-icon">P</div>
-        <span>Pinsk</span>
-        <span class="brand-ai">AI</span>
-        <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Закрыть меню">×</button>
+      <div class="sidebar-header">
+        <div class="logo">P</div>
+        <span class="brand-name">Pinsk AI</span>
+        <button id="closeSidebar" class="icon-button" aria-label="Закрыть меню">×</button>
       </div>
 
-      <button class="new-chat" id="newChat" type="button">＋ Новый чат</button>
+      <button id="newChatBtn" class="new-chat-btn">＋ Новый чат</button>
 
-      <nav class="navigation">
-        <div class="nav-label">Рабочее пространство</div>
-        <button class="nav-item active" data-page="chat" type="button">✧ <span>Чат</span></button>
-        <button class="nav-item" data-page="overview" type="button">◫ <span>Обзор</span></button>
-        <button class="nav-item" data-page="projects" type="button">▦ <span>Проекты</span></button>
-        <button class="nav-item" data-page="library" type="button">▤ <span>Библиотека</span></button>
-        <button class="nav-item" data-page="plugins" type="button">⌘ <span>Плагины</span></button>
-        <button class="nav-item" data-page="analysis" type="button">▥ <span>Анализ данных</span></button>
-        <button class="nav-item" data-page="voice" type="button">◉ <span>Голосовой режим</span></button>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-page="chat">💬 Чат</button>
+        <button class="nav-item" data-page="overview">◫ Обзор</button>
+        <button class="nav-item" data-page="projects">▦ Проекты</button>
+        <button class="nav-item" data-page="library">▤ Библиотека</button>
+        <button class="nav-item" data-page="plugins">🧩 Плагины</button>
       </nav>
 
-      <div class="history-section">
-        <div class="nav-label">История</div>
-        <div id="history" class="history"></div>
-      </div>
+      <div class="sidebar-section-title">История чатов</div>
+      <div id="chatHistory" class="chat-history"></div>
 
-      <div class="sidebar-bottom">
-        <div class="plan-card">
-          <div class="plan-top">
-            <span>Ваш тариф</span>
-            <span class="free-badge">FREE</span>
-          </div>
-          <div class="plan-description">Попробуйте возможности Pinsk PRO</div>
-          <button id="upgradeButton" class="upgrade-button" type="button">Улучшить тариф ↗</button>
-        </div>
-
-        <button class="profile" id="profileButton" type="button">
-          <div class="avatar" id="avatar">U</div>
-          <div class="profile-info">
-            <strong id="profileName">Пользователь</strong>
-            <small>Бесплатный план</small>
-          </div>
-          <span class="profile-menu">•••</span>
-        </button>
+      <div class="sidebar-footer">
+        <button id="settingsBtn" class="nav-item">⚙ Настройки</button>
+        <button id="profileBtn" class="nav-item">👤 Профиль</button>
       </div>
     </aside>
 
-    <main class="main">
+    <main class="main-content">
       <header class="topbar">
-        <div class="topbar-left">
-          <button class="mobile-menu" id="mobileMenu" type="button" aria-label="Открыть меню">☰</button>
-          <div class="topbar-title" id="pageTitle">Pinsk AI</div>
-        </div>
-
+        <button id="openSidebar" class="icon-button" aria-label="Открыть меню">☰</button>
+        <div class="topbar-title">Pinsk AI</div>
         <div class="topbar-actions">
-          <button class="icon-button" id="settingsButton" title="Настройки" type="button">⚙</button>
-          <button class="top-upgrade" id="topUpgrade" type="button">Перейти на PRO ↗</button>
+          <button id="reasoningBtn" class="icon-button" title="Режим рассуждения">◈</button>
+          <button id="languageBtn" class="icon-button" title="Язык">🌐</button>
         </div>
       </header>
 
-      <section class="workspace" id="workspace">
-        <div id="pageView"></div>
+      <section id="workspace" class="workspace">
+        <div id="chatPage" class="page active">
+          <div id="chatMessages" class="chat-messages">
+            <div class="welcome-screen">
+              <div class="welcome-logo">P</div>
+              <h1>Чем могу помочь?</h1>
+              <p>Спроси о чём угодно — начнём работу вместе.</p>
+            </div>
+          </div>
 
-        <div class="welcome" id="welcome">
-          <div class="welcome-symbol">✳</div>
-          <h1>Чем могу помочь?</h1>
-          <p>Я Pinsk — ваш интеллектуальный помощник.</p>
-
-          <div class="suggestions">
-            <button class="suggestion" data-prompt="Помоги мне написать текст" type="button">
-              <span>✎</span>
-              <strong>Написать текст</strong>
-              <small>Письма, статьи и идеи</small>
-            </button>
-            <button class="suggestion" data-prompt="Объясни сложную тему простыми словами" type="button">
-              <span>◈</span>
-              <strong>Объяснить тему</strong>
-              <small>Понятные ответы</small>
-            </button>
-            <button class="suggestion" data-prompt="Помоги написать программный код" type="button">
-              <span>⌘</span>
-              <strong>Написать код</strong>
-              <small>Программирование</small>
-            </button>
-            <button class="suggestion" data-prompt="Придумай интересную идею для проекта" type="button">
-              <span>✧</span>
-              <strong>Найти идею</strong>
-              <small>Творчество и проекты</small>
-            </button>
+          <div class="composer-container">
+            <div class="composer">
+              <textarea id="messageInput" placeholder="Напишите сообщение..." rows="1"></textarea>
+              <div class="composer-actions">
+                <div class="composer-left">
+                  <button id="attachBtn" class="icon-button" title="Прикрепить файл">＋</button>
+                  <input id="fileInput" type="file" hidden multiple>
+                </div>
+                <div class="composer-right">
+                  <button id="voiceBtn" class="icon-button" title="Голосовой ввод">🎙</button>
+                  <button id="sendBtn" class="send-button" title="Отправить">↑</button>
+                </div>
+              </div>
+            </div>
+            <p class="composer-disclaimer">Pinsk AI может допускать ошибки. Проверяйте важную информацию.</p>
           </div>
         </div>
 
-        <div id="messages" class="messages"></div>
+        <section id="overviewPage" class="page"></section>
+        <section id="projectsPage" class="page"></section>
+        <section id="libraryPage" class="page"></section>
+        <section id="pluginsPage" class="page"></section>
       </section>
-
-      <footer class="composer-area" id="composerArea">
-        <form class="composer" id="chatForm">
-          <div id="attachmentPreview" class="attachment-preview" aria-live="polite"></div>
-
-          <textarea
-            id="prompt"
-            rows="1"
-            placeholder="Спросите что-нибудь у Pinsk..."
-            autocomplete="off"
-          ></textarea>
-
-          <div class="composer-tools">
-            <div class="composer-left">
-              <button type="button" class="tool-button" id="attachButton">＋ <span>Файл</span></button>
-              <button type="button" class="tool-button" id="reasoningButton">◈ <span>Глубокое мышление</span></button>
-              <input type="file" id="fileInput" hidden multiple>
-            </div>
-            <button type="submit" class="send-button" id="sendButton" title="Отправить" aria-label="Отправить">↑</button>
-          </div>
-        </form>
-        <div class="disclaimer">Pinsk может допускать ошибки. Проверяйте важную информацию.</div>
-      </footer>
     </main>
   </div>
 
-  <div class="modal-backdrop" id="modalBackdrop">
-    <div class="modal" id="modal">
-      <button class="modal-close" id="modalClose" type="button">×</button>
-      <div id="modalContent"></div>
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <button id="closeModal" class="icon-button">×</button>
+      <div id="modalBody"></div>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div id="toast" class="toast"></div>
 
-  <script src="/app.js" defer></script>
+  <script src="/app.js"></script>
 </body>
 </html>
