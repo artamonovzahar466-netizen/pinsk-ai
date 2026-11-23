@@ -3,6 +3,7 @@
 
 /* =========================================
    PINSK AI — APP.JS
+   Совместим с текущим index.html
    ========================================= */
 
 const $ = id => document.getElementById(id);
@@ -56,7 +57,6 @@ function escapeHTML(value) {
 
 function toast(message) {
   const element = $("toast");
-
   if (!element) {
     console.log(message);
     return;
@@ -82,7 +82,7 @@ function isOwner() {
 }
 
 /* =========================================
-   МАТЕМАТИКА
+   МАТЕМАТИКА И MARKDOWN
    ========================================= */
 
 function cleanMath(value) {
@@ -158,10 +158,6 @@ function cleanMath(value) {
   return text;
 }
 
-/* =========================================
-   MARKDOWN
-   ========================================= */
-
 function renderInlineMarkdown(value) {
   let text = escapeHTML(cleanMath(value));
 
@@ -212,9 +208,8 @@ function renderMarkdown(value) {
       closeParagraph();
       closeList();
 
-      if (inCode) {
-        closeCode();
-      } else {
+      if (inCode) closeCode();
+      else {
         inCode = true;
         codeLanguage = fence[1] || "text";
       }
@@ -237,7 +232,6 @@ function renderMarkdown(value) {
     if (heading) {
       closeParagraph();
       closeList();
-
       const level = heading[1].length;
       html += `<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`;
       continue;
@@ -287,7 +281,7 @@ async function api(url, options = {}) {
   let response;
 
   try {
-    response = await window.fetch.call(window, url, {
+    response = await fetch(url, {
       ...options,
       credentials: "include",
       headers: {
@@ -297,10 +291,10 @@ async function api(url, options = {}) {
           : { "Content-Type": "application/json" })
       }
     });
-  } catch (error) {
-    const connectionError = new Error("Не удалось подключиться к серверу.");
-    connectionError.status = 0;
-    throw connectionError;
+  } catch {
+    const error = new Error("Не удалось подключиться к серверу.");
+    error.status = 0;
+    throw error;
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -329,22 +323,25 @@ async function api(url, options = {}) {
    ========================================= */
 
 function showModal(content) {
-  const backdrop = $("modalBackdrop");
-  const modalContent = $("modalContent");
+  const modal = $("modal");
+  const body = $("modalBody");
 
-  if (!backdrop || !modalContent) {
+  if (!modal || !body) {
     toast("Окно приложения не найдено.");
     return;
   }
 
-  modalContent.innerHTML = content;
-  backdrop.classList.add("active");
-  $("modal")?.classList.add("active");
+  body.innerHTML = content;
+  modal.classList.remove("hidden");
+  modal.classList.add("active");
 }
 
 function closeModal() {
-  $("modalBackdrop")?.classList.remove("active");
-  $("modal")?.classList.remove("active");
+  const modal = $("modal");
+  if (!modal) return;
+
+  modal.classList.add("hidden");
+  modal.classList.remove("active");
 }
 
 /* =========================================
@@ -420,20 +417,16 @@ function showAuth(mode = "login") {
       if (!data.user) throw new Error("Сервер не вернул пользователя.");
 
       currentUser = data.user;
-
       closeModal();
       updateProfile();
 
       await loadUsage();
       await loadHistory();
-
       renderPage("chat");
 
-      toast(
-        currentUser.role === "OWNER"
-          ? "Добро пожаловать, владелец Pinsk!"
-          : "Добро пожаловать в Pinsk!"
-      );
+      toast(isOwner()
+        ? "Добро пожаловать, владелец Pinsk!"
+        : "Добро пожаловать в Pinsk!");
 
     } catch (err) {
       error.textContent = err.message;
@@ -454,25 +447,16 @@ function showAuth(mode = "login") {
 async function checkAuth() {
   try {
     const data = await api("/api/auth/me");
-
     currentUser = data.user || null;
     updateProfile();
-
     return Boolean(currentUser);
-
   } catch (error) {
     console.error("Проверка авторизации:", error);
 
-    if (error.status === 401) {
+    if (error.status === 401 || error.status === 403) {
       currentUser = null;
       updateProfile();
-      return false;
-    }
-
-    if (error.status === 403) {
-      currentUser = null;
-      updateProfile();
-      toast(error.message);
+      if (error.status === 403) toast(error.message);
       return false;
     }
 
@@ -496,7 +480,7 @@ async function logout() {
 }
 
 /* =========================================
-   ПРОФИЛЬ И OWNER
+   ПРОФИЛЬ
    ========================================= */
 
 function updateProfile() {
@@ -506,8 +490,8 @@ function updateProfile() {
   if ($("profileName")) $("profileName").textContent = name;
   if ($("avatar")) $("avatar").textContent = name.charAt(0).toUpperCase();
 
-  if ($("profileButton")) {
-    $("profileButton").title = currentUser
+  if ($("profileBtn")) {
+    $("profileBtn").title = currentUser
       ? `${name} · ${role}`
       : "Войти";
   }
@@ -544,7 +528,9 @@ function showProfile() {
       <h3>${escapeHTML(currentUser.name)}</h3>
       <p>${escapeHTML(currentUser.email)}</p>
       <p>Тариф: ${escapeHTML(role)}</p>
-      ${role === "OWNER" ? "<p>Владелец Pinsk AI. Полный доступ без ограничений.</p>" : ""}
+      ${role === "OWNER"
+        ? "<p>Владелец Pinsk AI. Полный доступ без ограничений.</p>"
+        : ""}
       <button class="secondary-button" id="profilePlans">Тарифы</button>
       <button class="secondary-button" id="profileLogout">Выйти</button>
     </div>
@@ -559,7 +545,7 @@ function showProfile() {
 }
 
 /* =========================================
-   ТАРИФЫ
+   ТАРИФЫ И ИСПОЛЬЗОВАНИЕ
    ========================================= */
 
 function renderPlans() {
@@ -596,7 +582,6 @@ function renderPlans() {
             <li>5 файлов в день</li>
             <li>История чатов</li>
             <li>Базовый ИИ-ассистент</li>
-            <li>Проекты и библиотека</li>
           </ul>
           <p><strong>Стоимость: 0 ₸</strong></p>
         </div>
@@ -608,38 +593,32 @@ function renderPlans() {
           <ul>
             <li>Безлимитные сообщения</li>
             <li>Безлимитные файлы</li>
-            <li>Безлимитная генерация изображений при подключении модели</li>
+            <li>Генерация изображений при подключении модели</li>
             <li>Проекты и библиотека</li>
             <li>Глубокое рассуждение</li>
             <li>Голосовое общение</li>
             <li>Расширенные инструменты</li>
           </ul>
-          <p><strong>2 990 ₸ в месяц</strong></p>
         </div>
 
         <div class="dashboard-card">
           <h3>Pinsk PRO — годовой</h3>
           <h2>30 498 ₸ / год</h2>
-          <p>Экономия 15% по сравнению с оплатой за каждый месяц.</p>
+          <p>Экономия 15% по сравнению с помесячной оплатой.</p>
           <ul>
             <li>Все возможности PRO</li>
             <li>Оплата за год</li>
             <li>Выгоднее месячного плана</li>
           </ul>
-          <p><strong>30 498 ₸ в год</strong></p>
         </div>
       </div>
 
       <p class="muted-text">
-        Подключение оплаты пока не настроено. Тарифы отображают запланированные возможности.
+        Подключение оплаты пока не настроено.
       </p>
     </div>
   `;
 }
-
-/* =========================================
-   ИСПОЛЬЗОВАНИЕ
-   ========================================= */
 
 async function loadUsage() {
   if (!currentUser) return;
@@ -669,21 +648,33 @@ function renderUsage() {
 }
 
 /* =========================================
-   ЧАТЫ
+   ЧАТ
    ========================================= */
 
 function newChat() {
   currentChatId = null;
 
-  if ($("messages")) $("messages").innerHTML = "";
-  if ($("prompt")) $("prompt").value = "";
+  if ($("chatMessages")) {
+    $("chatMessages").innerHTML = `
+      <div class="welcome-screen" id="welcome">
+        <div class="welcome-logo">P</div>
+        <h1>Чем могу помочь?</h1>
+        <p>Спроси о чём угодно — начнём работу вместе.</p>
+      </div>
+    `;
+  }
+
+  if ($("messageInput")) $("messageInput").value = "";
 
   renderPage("chat");
+  renderHistory();
 }
 
 function renderMessage(role, content) {
-  const messages = $("messages");
+  const messages = $("chatMessages");
   if (!messages) return;
+
+  messages.querySelector(".welcome-screen")?.remove();
 
   const isUser = role === "user";
 
@@ -730,13 +721,14 @@ async function loadHistory() {
 }
 
 function renderHistory() {
-  const container = $("history");
+  const container = $("chatHistory");
   if (!container) return;
 
   container.innerHTML = "";
 
   chats.forEach(chat => {
     const button = document.createElement("button");
+    button.type = "button";
     button.className = "history-item";
     button.textContent = chat.title || "Новый чат";
 
@@ -755,13 +747,15 @@ async function openChat(id) {
 
     currentChatId = id;
 
-    if ($("messages")) $("messages").innerHTML = "";
+    if ($("chatMessages")) $("chatMessages").innerHTML = "";
 
     const messages = Array.isArray(result)
       ? result
       : result.messages || [];
 
-    messages.forEach(message => renderMessage(message.role, message.content));
+    messages.forEach(message => {
+      renderMessage(message.role, message.content);
+    });
 
     renderHistory();
     renderPage("chat");
@@ -780,26 +774,19 @@ async function sendMessage(value, options = {}) {
 
   isSending = true;
 
-  const sendButton = $("sendButton");
+  const sendButton = $("sendBtn");
   if (sendButton) sendButton.disabled = true;
 
-  if (currentPage === "chat" && $("welcome")) {
-    $("welcome").style.display = "none";
-  }
+  $("chatMessages")?.querySelector(".welcome-screen")?.remove();
 
   renderMessage("user", message);
 
-  if ($("prompt")) $("prompt").value = "";
+  if ($("messageInput")) $("messageInput").value = "";
 
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
-
-  const loadingText = document.createElement("div");
-  loadingText.className = "message-content";
-  loadingText.textContent = "Pinsk думает...";
-
-  loading.appendChild(loadingText);
-  $("messages")?.appendChild(loading);
+  loading.textContent = "Pinsk думает...";
+  $("chatMessages")?.appendChild(loading);
 
   try {
     const data = await api("/api/chat", {
@@ -843,9 +830,9 @@ function getPageView() {
   let element = $("pageView");
 
   if (!element) {
-    element = document.createElement("div");
+    element = document.createElement("section");
     element.id = "pageView";
-    element.className = "page-view";
+    element.className = "page";
     workspace.appendChild(element);
   }
 
@@ -880,33 +867,37 @@ function renderPage(page) {
     admin: "Админ-панель"
   };
 
-  if ($("pageTitle")) $("pageTitle").textContent = titles[page] || "Pinsk AI";
+  const title = document.querySelector(".topbar-title");
+  if (title) title.textContent = titles[page] || "Pinsk AI";
 
-  renderPageContent(page);
+  const chatPage = $("chatPage");
+  const view = getPageView();
+
+  if (chatPage) chatPage.classList.toggle("active", page === "chat");
+
+  if (view) {
+    view.classList.toggle("active", page !== "chat");
+    view.style.display = page === "chat" ? "none" : "flex";
+  }
+
   $("sidebar")?.classList.remove("open");
+
+  if (page !== "chat") renderPageContent(page);
+  else if ($("chatMessages") && !currentChatId &&
+    !$("chatMessages").querySelector(".message")) {
+    $("chatMessages").innerHTML = `
+      <div class="welcome-screen" id="welcome">
+        <div class="welcome-logo">P</div>
+        <h1>Чем могу помочь?</h1>
+        <p>Спроси о чём угодно — начнём работу вместе.</p>
+      </div>
+    `;
+  }
 }
 
 function renderPageContent(page) {
   const view = getPageView();
   if (!view) return;
-
-  const welcome = $("welcome");
-  const messages = $("messages");
-  const composer = $("composerArea");
-
-  if (page === "chat") {
-    view.style.display = "none";
-    if (welcome) welcome.style.display = currentChatId ? "none" : "";
-    if (messages) messages.style.display = "flex";
-    if (composer) composer.style.display = "";
-    return;
-  }
-
-  if (welcome) welcome.style.display = "none";
-  if (messages) messages.style.display = "none";
-  if (composer) composer.style.display = "none";
-
-  view.style.display = "block";
 
   if (page === "overview") {
     view.innerHTML = `
@@ -1034,7 +1025,9 @@ async function renderPlugins() {
         <h3>${escapeHTML(plugin.name)}</h3>
         <p>${escapeHTML(plugin.description)}</p>
         <p class="plugin-status">
-          ${plugin.status === "available" ? "Доступен" : "Требуется подключение"}
+          ${plugin.status === "available"
+            ? "Доступен"
+            : "Требуется подключение"}
         </p>
       </div>
     `).join("");
@@ -1059,25 +1052,14 @@ function renderAnalysis() {
 
       <div class="dashboard-card">
         <label for="analysisFile">Выбрать файл</label>
-        <input
-          type="file"
-          id="analysisFile"
-          accept=".csv,.txt,.json,.md"
-        >
-
+        <input type="file" id="analysisFile" accept=".csv,.txt,.json,.md">
         <p id="analysisFileName">Файл не выбран.</p>
 
         <label for="analysisQuestion">Что нужно проанализировать?</label>
-        <textarea
-          id="analysisQuestion"
-          rows="4"
-          placeholder="Например: найди закономерности, посчитай итоги и сделай выводы."
-        ></textarea>
+        <textarea id="analysisQuestion" rows="4"
+          placeholder="Например: найди закономерности и сделай выводы."></textarea>
 
-        <button class="primary-button" id="runAnalysis">
-          Проанализировать
-        </button>
-
+        <button class="primary-button" id="runAnalysis">Проанализировать</button>
         <div id="analysisResult" class="analysis-result"></div>
       </div>
     </div>
@@ -1085,7 +1067,6 @@ function renderAnalysis() {
 
   $("analysisFile")?.addEventListener("change", event => {
     selectedAnalysisFile = event.target.files?.[0] || null;
-
     $("analysisFileName").textContent = selectedAnalysisFile
       ? `Выбран файл: ${selectedAnalysisFile.name}`
       : "Файл не выбран.";
@@ -1104,21 +1085,14 @@ async function runAnalysis() {
   const result = $("analysisResult");
   const button = $("runAnalysis");
 
-  if (!file) {
-    toast("Сначала выбери файл.");
-    return;
-  }
+  if (!file) return toast("Сначала выбери файл.");
 
-  const allowed = /\.(csv|txt|json|md)$/i.test(file.name);
-
-  if (!allowed) {
-    toast("Пока поддерживаются CSV, TXT, JSON и MD.");
-    return;
+  if (!/\.(csv|txt|json|md)$/i.test(file.name)) {
+    return toast("Поддерживаются CSV, TXT, JSON и MD.");
   }
 
   if (file.size > 2 * 1024 * 1024) {
-    toast("Размер файла не должен превышать 2 МБ.");
-    return;
+    return toast("Размер файла не должен превышать 2 МБ.");
   }
 
   button.disabled = true;
@@ -1130,10 +1104,7 @@ async function runAnalysis() {
 
     const data = await api("/api/analysis", {
       method: "POST",
-      body: JSON.stringify({
-        content,
-        question
-      })
+      body: JSON.stringify({ content, question })
     });
 
     result.innerHTML = renderMarkdown(data.answer || "Нет результата.");
@@ -1159,9 +1130,8 @@ function renderProjects() {
       <div class="dashboard-card">
         <h3>${escapeHTML(project.name)}</h3>
         <p>${escapeHTML(project.description || "")}</p>
-        <button class="secondary-button" data-delete-project="${escapeHTML(project.id)}">
-          Удалить
-        </button>
+        <button class="secondary-button"
+          data-delete-project="${escapeHTML(project.id)}">Удалить</button>
       </div>
     `).join("")
     : "<p>Пока нет проектов.</p>";
@@ -1210,9 +1180,8 @@ function renderLibrary() {
       <div class="dashboard-card">
         <h3>${escapeHTML(item.title)}</h3>
         <p>${escapeHTML(item.content)}</p>
-        <button class="secondary-button" data-delete-library="${escapeHTML(item.id)}">
-          Удалить
-        </button>
+        <button class="secondary-button"
+          data-delete-library="${escapeHTML(item.id)}">Удалить</button>
       </div>
     `).join("")
     : "<p>Библиотека пуста.</p>";
@@ -1254,23 +1223,17 @@ function addLibraryItem() {
 
 function addAdminNavigation() {
   if (!isOwner()) return;
-  if (document.querySelector('[data-page="admin"]')) return;
 
-  const nav = document.querySelector("#sidebar .navigation") ||
-    document.querySelector(".navigation");
-
-  if (!nav) {
-    console.warn("Pinsk: не найдена навигация.");
-    return;
-  }
+  const nav = document.querySelector(".sidebar-nav");
+  if (!nav || document.querySelector('[data-page="admin"]')) return;
 
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.page = "admin";
   button.className = "nav-item";
   button.textContent = "⚙ Админ-панель";
-
   button.addEventListener("click", () => renderPage("admin"));
+
   nav.appendChild(button);
 }
 
@@ -1341,11 +1304,7 @@ async function loadAdminUsers() {
 
   try {
     const search = $("adminSearch")?.value || "";
-
-    const result = await api(
-      "/api/admin/users?search=" + encodeURIComponent(search)
-    );
-
+    const result = await api("/api/admin/users?search=" + encodeURIComponent(search));
     const users = Array.isArray(result) ? result : result.users || [];
 
     if (!users.length) {
@@ -1413,30 +1372,25 @@ function startVoice() {
   recognition.onstart = () => {
     const status = $("voiceStatus");
     if (status) status.textContent = "Слушаю тебя...";
-    $("voiceButton")?.classList.add("recording");
+    $("voiceBtn")?.classList.add("recording");
   };
 
   recognition.onresult = event => {
     const spokenText = event.results[0][0].transcript;
-
-    if ($("prompt")) $("prompt").value = spokenText;
-
+    if ($("messageInput")) $("messageInput").value = spokenText;
     sendMessage(spokenText, { speak: true });
   };
 
   recognition.onerror = event => {
     console.error("Voice recognition:", event.error);
-
-    if (event.error === "not-allowed") {
-      toast("Разреши доступ к микрофону в браузере.");
-    } else {
-      toast("Ошибка распознавания речи.");
-    }
+    toast(event.error === "not-allowed"
+      ? "Разреши доступ к микрофону в браузере."
+      : "Ошибка распознавания речи.");
   };
 
   recognition.onend = () => {
     recognition = null;
-    $("voiceButton")?.classList.remove("recording");
+    $("voiceBtn")?.classList.remove("recording");
   };
 
   try {
@@ -1466,38 +1420,10 @@ function stopVoice() {
     window.speechSynthesis.cancel();
   }
 
-  $("voiceButton")?.classList.remove("recording");
+  $("voiceBtn")?.classList.remove("recording");
 
   if ($("voiceStatus")) {
     $("voiceStatus").textContent = "Голосовой режим остановлен.";
-  }
-}
-
-function installVoiceButton() {
-  const form = $("chatForm");
-  const prompt = $("prompt");
-
-  if (!form || !prompt || $("voiceButton")) return;
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.id = "voiceButton";
-  button.className = "voice-inline-button";
-  button.title = "Голосовой ввод";
-  button.setAttribute("aria-label", "Голосовой ввод");
-  button.textContent = "🎙";
-
-  button.addEventListener("click", () => {
-    if (recognition) stopVoice();
-    else startVoice();
-  });
-
-  const sendButton = $("sendButton");
-
-  if (sendButton && sendButton.parentElement === form) {
-    form.insertBefore(button, sendButton);
-  } else {
-    form.appendChild(button);
   }
 }
 
@@ -1539,70 +1465,96 @@ function showSettings() {
 }
 
 /* =========================================
-   СОБЫТИЯ
+   СОБЫТИЯ ИНТЕРФЕЙСА
    ========================================= */
 
 function initEvents() {
-  $("chatForm")?.addEventListener("submit", event => {
-    event.preventDefault();
-    sendMessage($("prompt")?.value || "");
+  // Отправка сообщения
+  $("sendBtn")?.addEventListener("click", () => {
+    sendMessage($("messageInput")?.value || "");
   });
 
-  $("prompt")?.addEventListener("keydown", event => {
+  $("messageInput")?.addEventListener("keydown", event => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      $("chatForm")?.requestSubmit();
+      sendMessage($("messageInput")?.value || "");
     }
   });
 
-  $("newChat")?.addEventListener("click", newChat);
-  $("profileButton")?.addEventListener("click", showProfile);
-  $("upgradeButton")?.addEventListener("click", () => renderPage("plans"));
-  $("topUpgrade")?.addEventListener("click", () => renderPage("plans"));
-  $("settingsButton")?.addEventListener("click", showSettings);
-  $("modalClose")?.addEventListener("click", closeModal);
+  // Основные кнопки
+  $("newChatBtn")?.addEventListener("click", newChat);
+  $("profileBtn")?.addEventListener("click", showProfile);
+  $("settingsBtn")?.addEventListener("click", showSettings);
 
-  $("modalBackdrop")?.addEventListener("click", event => {
-    if (event.target === $("modalBackdrop")) closeModal();
+  // Закрытие модального окна
+  $("closeModal")?.addEventListener("click", closeModal);
+
+  $("modal")?.addEventListener("click", event => {
+    if (event.target === $("modal")) closeModal();
   });
 
+  // Навигация
   document.querySelectorAll("[data-page]").forEach(button => {
-    button.addEventListener("click", () => renderPage(button.dataset.page));
+    button.addEventListener("click", () => {
+      renderPage(button.dataset.page);
+    });
   });
 
-  $("welcome")?.addEventListener("click", event => {
-    const item = event.target.closest("[data-prompt]");
-    if (item) sendMessage(item.dataset.prompt);
+  // Мобильное меню
+  $("openSidebar")?.addEventListener("click", () => {
+    $("sidebar")?.classList.toggle("open");
   });
 
-  $("reasoningButton")?.addEventListener("click", () => {
+  $("closeSidebar")?.addEventListener("click", () => {
+    $("sidebar")?.classList.remove("open");
+  });
+
+  // Режим рассуждения
+  $("reasoningBtn")?.addEventListener("click", () => {
     const enabled = localStorage.getItem(STORAGE.reasoning) !== "true";
 
     localStorage.setItem(STORAGE.reasoning, String(enabled));
-    $("reasoningButton")?.classList.toggle("active", enabled);
+    $("reasoningBtn")?.classList.toggle("active", enabled);
 
     toast(enabled
       ? "Глубокое мышление включено."
-      : "Глубокое мышление выключено."
-    );
+      : "Глубокое мышление выключено.");
   });
 
-  $("attachButton")?.addEventListener("click", () => {
+  // Язык
+  $("languageBtn")?.addEventListener("click", () => {
+    language = language === "ru" ? "en" : "ru";
+    localStorage.setItem(STORAGE.language, language);
+    toast(language === "ru" ? "Язык: русский" : "Language: English");
+  });
+
+  // Файлы
+  $("attachBtn")?.addEventListener("click", () => {
     $("fileInput")?.click();
   });
 
   $("fileInput")?.addEventListener("change", () => {
-    const file = $("fileInput")?.files?.[0];
-    if (file) toast("Выбран файл: " + file.name);
+    const files = Array.from($("fileInput")?.files || []);
+    if (files.length) {
+      toast("Выбрано файлов: " + files.length);
+    }
   });
 
-  $("mobileMenu")?.addEventListener("click", () => {
-    $("sidebar")?.classList.toggle("open");
+  // Голосовой ввод
+  $("voiceBtn")?.addEventListener("click", () => {
+    if (recognition) stopVoice();
+    else startVoice();
   });
+
+  // Состояние рассуждения при загрузке
+  $("reasoningBtn")?.classList.toggle(
+    "active",
+    localStorage.getItem(STORAGE.reasoning) === "true"
+  );
 }
 
 /* =========================================
-   СТИЛИ
+   ДОПОЛНИТЕЛЬНЫЕ СТИЛИ
    ========================================= */
 
 function installPinskUiFixes() {
@@ -1612,19 +1564,73 @@ function installPinskUiFixes() {
   style.id = "pinskUiFixes";
 
   style.textContent = `
-    .auth-box label,
-    .profile-modal label {
+    #pageView {
+      overflow-y: auto;
+      align-items: stretch;
+    }
+
+    #pageView.active {
+      display: flex;
+    }
+
+    .page-content {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      padding: 30px;
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .dashboard-card {
+      padding: 20px;
+      margin: 14px 0;
+      background: #20202a;
+      border: 1px solid #30303b;
+      border-radius: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .dashboard-card h3 {
+      margin-top: 0;
+    }
+
+    .dashboard-card p,
+    .muted-text {
+      color: #9999a8;
+    }
+
+    .page-content input:not([type="file"]),
+    .page-content textarea {
+      display: block;
+      width: 100%;
+      margin: 10px 0;
+      padding: 12px;
+      color: #f5f5f7;
+      background: #111116;
+      border: 1px solid #3b3949;
+      border-radius: 9px;
+    }
+
+    .page-content textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+
+    .auth-box label {
       display: block;
       margin: 14px 0 7px;
       color: #d8d5e8;
       font-weight: 600;
     }
 
-    .auth-box input,
-    .profile-modal input,
-    .modal input:not([type="checkbox"]),
-    .modal select,
-    .modal textarea {
+    .modal-content input:not([type="checkbox"]),
+    .modal-content select,
+    .modal-content textarea {
       display: block;
       width: 100%;
       min-height: 42px;
@@ -1637,10 +1643,9 @@ function installPinskUiFixes() {
       outline: none;
     }
 
-    .auth-box input:focus,
-    .modal input:focus,
-    .modal select:focus,
-    .modal textarea:focus {
+    .modal-content input:focus,
+    .modal-content select:focus,
+    .modal-content textarea:focus {
       border-color: #8b78ff;
       box-shadow: 0 0 0 2px #8b78ff26;
     }
@@ -1652,32 +1657,32 @@ function installPinskUiFixes() {
       justify-content: center;
       min-height: 40px;
       padding: 10px 15px;
+      margin: 5px 5px 5px 0;
       border-radius: 9px;
       font: inherit;
       font-weight: 650;
       cursor: pointer;
-      transition: background .2s, border-color .2s, transform .2s;
     }
 
     .primary-button {
-      color: #fff !important;
-      background: #7865e8 !important;
-      border: 1px solid #8b78ff !important;
+      color: #fff;
+      background: #7865e8;
+      border: 1px solid #8b78ff;
     }
 
     .primary-button:hover {
-      background: #8b78ff !important;
+      background: #8b78ff;
     }
 
     .secondary-button {
-      color: #e8e4ff !important;
-      background: #292638 !important;
-      border: 1px solid #514875 !important;
+      color: #e8e4ff;
+      background: #292638;
+      border: 1px solid #514875;
     }
 
     .secondary-button:hover {
-      background: #39324f !important;
-      border-color: #8b78ff !important;
+      background: #39324f;
+      border-color: #8b78ff;
     }
 
     .primary-button:disabled,
@@ -1696,22 +1701,61 @@ function installPinskUiFixes() {
     }
 
     .error-text {
-      color: #ff8b9b !important;
+      color: #ff8b9b;
     }
 
-    .modal-backdrop.active {
+    .message {
       display: flex;
+      gap: 13px;
+      width: 100%;
+      margin: 20px 0;
+      line-height: 1.65;
     }
 
-    .message-text p {
+    .message-content {
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+
+    .message-author {
+      margin-bottom: 6px;
+      font-weight: 700;
+    }
+
+    .message-avatar {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      flex: 0 0 30px;
+      color: white;
+      background: linear-gradient(135deg, #a78bfa, #6d28d9);
+      border-radius: 9px;
+      font-weight: 800;
+    }
+
+    .user-message {
+      justify-content: flex-end;
+    }
+
+    .user-message .message-content {
+      padding: 12px 16px;
+      background: #292638;
+      border: 1px solid #39334f;
+      border-radius: 15px;
+    }
+
+    .assistant-message .message-text p {
       margin: 0 0 10px;
     }
 
-    .message-text p:last-child {
+    .assistant-message .message-text p:last-child {
       margin-bottom: 0;
     }
 
-    .message-text pre {
+    .message-text pre,
+    .analysis-result pre {
       overflow-x: auto;
       padding: 12px;
       border-radius: 9px;
@@ -1740,39 +1784,36 @@ function installPinskUiFixes() {
       margin: 12px 0;
     }
 
+    .history-item {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      padding: 10px;
+      margin: 3px 0;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #9999a8;
+      background: transparent;
+      border-radius: 8px;
+    }
+
+    .history-item:hover,
+    .history-item.active {
+      color: #fff;
+      background: #292936;
+    }
+
+    .loading-message {
+      color: #9999a8;
+    }
+
     .owner-badge {
       color: #f0d28b;
     }
 
-    .voice-inline-button {
-      width: 42px;
-      height: 42px;
-      flex: 0 0 42px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid #514875;
-      border-radius: 12px;
-      color: #e8e4ff;
-      background: #292638;
-      font-size: 19px;
-      cursor: pointer;
-      margin: 0 6px;
-    }
-
-    .voice-inline-button:hover {
-      background: #39324f;
-      border-color: #8b78ff;
-    }
-
-    .voice-inline-button.recording {
-      background: #713b55;
-      border-color: #ff759d;
-      animation: pinskPulse 1.2s infinite;
-    }
-
-    @keyframes pinskPulse {
-      50% { box-shadow: 0 0 0 5px #ff759d33; }
+    .pro-badge {
+      color: #b5a8ff;
     }
 
     .analysis-result {
@@ -1781,35 +1822,45 @@ function installPinskUiFixes() {
       overflow-wrap: anywhere;
     }
 
-    .analysis-result pre {
-      overflow-x: auto;
-      padding: 12px;
-      background: #111116;
-      border-radius: 9px;
-    }
-
     .plugin-status {
       color: #b5a8ff;
       font-size: 13px;
     }
 
-    .page-content textarea {
-      display: block;
-      width: 100%;
-      min-height: 100px;
-      margin: 10px 0;
-      padding: 12px;
-      color: #f2f2f5;
-      background: #111116;
-      border: 1px solid #3b3949;
-      border-radius: 9px;
-      resize: vertical;
+    .voice-page {
+      text-align: center;
     }
 
-    .page-content input[type="file"] {
-      display: block;
-      margin: 12px 0;
-      color: #f2f2f5;
+    .voice-controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 25px 0;
+    }
+
+    .voice-status {
+      color: #b5a8ff;
+    }
+
+    #voiceBtn.recording {
+      color: #ff759d;
+      background: #713b55;
+    }
+
+    #reasoningBtn.active {
+      color: #b5a8ff;
+      background: #292638;
+    }
+
+    @media (max-width: 760px) {
+      .page-content {
+        padding: 20px 14px;
+      }
+
+      .message {
+        gap: 8px;
+      }
     }
   `;
 
@@ -1825,7 +1876,6 @@ async function init() {
 
   installPinskUiFixes();
   initEvents();
-  installVoiceButton();
   updateProfile();
 
   const authResult = await checkAuth();
@@ -1834,13 +1884,12 @@ async function init() {
     await loadUsage();
     await loadHistory();
     renderPage("chat");
-
   } else if (authResult === false) {
-    showAuth("login");
-
-  } else {
-    toast("Сервер временно недоступен. Попробуй обновить страницу.");
     renderPage("chat");
+    showAuth("login");
+  } else {
+    renderPage("chat");
+    toast("Сервер временно недоступен. Попробуй обновить страницу.");
   }
 
   try {
