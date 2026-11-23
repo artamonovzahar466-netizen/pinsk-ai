@@ -391,5 +391,71 @@ button {
 
 *::-webkit-scrollbar-thumb {
   background: #484858;
+  
+/* PINSK AI — INTERFACE UPDATE */
+
+:root {
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+}
+
+.sidebar {
+  transition: width .25s ease, background .25s ease;
+}
+
+.nav-item,
+.icon-button,
+.new-chat-btn,
+.send-button {
+  transition: background .2s ease, color .2s ease,
+              border-color .2s ease, transform .2s ease;
+}
+
+.nav-item:hover {
+  transform: translateX(3px);
+}
+
+.new-chat-btn {
+  box-shadow: 0 4px 16px #8b5cf633;
+}
+
+.composer {
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.composer:focus-within {
+  box-shadow: 0 0 0 3px #8b5cf622;
+}
+
+.send-button:hover {
+  transform: scale(1.06);
+}
+
+.chat-history {
+  scrollbar-width: thin;
+}
+
+.modal-content {
+  animation: pinskModalIn .2s ease;
+}
+
+@keyframes pinskModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
+
   border-radius: 10px;
 }
