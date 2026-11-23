@@ -38,6 +38,14 @@ let language = localStorage.getItem(STORAGE.language) || "ru";
 let recognition = null;
 let selectedAnalysisFile = null;
 
+let selectedFiles = [];
+let imageMode = false;
+let temporaryUrls = [];
+
+/* =========================================
+   ХРАНИЛИЩЕ
+   ========================================= */
+
 function saveLocal() {
   localStorage.setItem(STORAGE.chats, JSON.stringify(chats));
   localStorage.setItem(STORAGE.projects, JSON.stringify(projects));
@@ -199,7 +207,9 @@ function renderMarkdown(value) {
 
   function closeCode() {
     if (!inCode) return;
+
     html += `<pre><code class="language-${escapeHTML(codeLanguage)}">${escapeHTML(codeLines.join("\n"))}</code></pre>`;
+
     codeLines = [];
     codeLanguage = "";
     inCode = false;
@@ -218,6 +228,7 @@ function renderMarkdown(value) {
         inCode = true;
         codeLanguage = fence[1] || "text";
       }
+
       continue;
     }
 
@@ -287,16 +298,20 @@ async function api(url, options = {}) {
   let response;
 
   try {
+    const headers = { ...(options.headers || {}) };
+
+    if (!(options.body instanceof FormData)) {
+      headers["Content-Type"] = "application/json";
+    } else {
+      delete headers["Content-Type"];
+    }
+
     response = await window.fetch.call(window, url, {
       ...options,
       credentials: "include",
-      headers: {
-        ...(options.headers || {}),
-        ...(options.body instanceof FormData
-          ? {}
-          : { "Content-Type": "application/json" })
-      }
+      headers
     });
+
   } catch (error) {
     const connectionError = new Error("Не удалось подключиться к серверу.");
     connectionError.status = 0;
@@ -487,6 +502,8 @@ async function logout() {
     console.error(error);
   }
 
+  clearSelectedFiles();
+
   currentUser = null;
   usageData = null;
   currentChatId = null;
@@ -608,7 +625,7 @@ function renderPlans() {
           <ul>
             <li>Безлимитные сообщения</li>
             <li>Безлимитные файлы</li>
-            <li>Безлимитная генерация изображений при подключении модели</li>
+            <li>Генерация изображений</li>
             <li>Проекты и библиотека</li>
             <li>Глубокое рассуждение</li>
             <li>Голосовое общение</li>
@@ -669,19 +686,171 @@ function renderUsage() {
 }
 
 /* =========================================
+   ВЛОЖЕНИЯ
+   ========================================= */
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + " Б";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " КБ";
+  return (bytes / (1024 * 1024)).toFixed(1) + " МБ";
+}
+
+function isImageFile(file) {
+  return /^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type);
+}
+
+function clearSelectedFiles() {
+  temporaryUrls.forEach(url => URL.revokeObjectURL(url));
+  temporaryUrls = [];
+
+  selectedFiles = [];
+
+  if ($("fileInput")) $("fileInput").value = "";
+
+  renderAttachmentPreview();
+}
+
+function removeSelectedFile(index) {
+  selectedFiles.splice(index, 1);
+  renderAttachmentPreview();
+}
+
+function addSelectedFiles(files) {
+  const incoming = Array.from(files || []);
+
+  if (!incoming.length) return;
+
+  const maxFiles = 5;
+  const maxSize = 12 * 1024 * 1024;
+
+  for (const file of incoming) {
+    if (selectedFiles.length >= maxFiles) {
+      toast("Можно прикрепить не более 5 файлов.");
+      break;
+    }
+
+    if (file.size > maxSize) {
+      toast(`Файл ${file.name} превышает 12 МБ.`);
+      continue;
+    }
+
+    const alreadyAdded = selectedFiles.some(item =>
+      item.name === file.name &&
+      item.size === file.size &&
+      item.lastModified === file.lastModified
+    );
+
+    if (alreadyAdded) continue;
+
+    selectedFiles.push(file);
+  }
+
+  if ($("fileInput")) $("fileInput").value = "";
+
+  renderAttachmentPreview();
+}
+
+function renderAttachmentPreview() {
+  const form = $("chatForm");
+  if (!form) return;
+
+  let container = $("attachmentPreview");
+
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "attachmentPreview";
+    container.className = "pinsk-attachment-preview";
+    form.parentElement?.insertBefore(container, form);
+  }
+
+  container.innerHTML = "";
+
+  if (!selectedFiles.length) {
+    container.style.display = "none";
+    return;
+  }
+
+  container.style.display = "flex";
+
+  selectedFiles.forEach((file, index) => {
+    const item = document.createElement("div");
+    item.className = "pinsk-attachment-item";
+
+    if (isImageFile(file)) {
+      const image = document.createElement("img");
+      image.className = "pinsk-attachment-thumb";
+
+      const url = URL.createObjectURL(file);
+      temporaryUrls.push(url);
+
+      image.src = url;
+      image.alt = file.name;
+
+      item.appendChild(image);
+    } else {
+      const icon = document.createElement("div");
+      icon.className = "pinsk-attachment-icon";
+      icon.textContent = file.name.split(".").pop()?.toUpperCase() || "FILE";
+      item.appendChild(icon);
+    }
+
+    const info = document.createElement("div");
+    info.className = "pinsk-attachment-info";
+
+    const name = document.createElement("div");
+    name.className = "pinsk-attachment-name";
+    name.textContent = file.name;
+
+    const size = document.createElement("div");
+    size.className = "pinsk-attachment-size";
+    size.textContent = formatFileSize(file.size);
+
+    info.append(name, size);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "pinsk-attachment-remove";
+    remove.textContent = "×";
+    remove.title = "Удалить файл";
+
+    remove.addEventListener("click", () => removeSelectedFile(index));
+
+    item.append(info, remove);
+    container.appendChild(item);
+  });
+}
+
+/* =========================================
    ЧАТЫ
    ========================================= */
 
 function newChat() {
   currentChatId = null;
 
+  clearSelectedFiles();
+
   if ($("messages")) $("messages").innerHTML = "";
   if ($("prompt")) $("prompt").value = "";
 
   renderPage("chat");
+  renderHistory();
 }
 
-function renderMessage(role, content) {
+function safeImageSource(source) {
+  const value = String(source || "");
+
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(value)) {
+    return value;
+  }
+
+  if (/^https:\/\/[^\s"'<>]+$/i.test(value)) {
+    return value;
+  }
+
+  return "";
+}
+
+function renderMessage(role, content, options = {}) {
   const messages = $("messages");
   if (!messages) return;
 
@@ -703,11 +872,54 @@ function renderMessage(role, content) {
   title.className = "message-author";
   title.textContent = isUser ? "Вы" : "Pinsk";
 
+  body.appendChild(title);
+
   const text = document.createElement("div");
   text.className = "message-text";
-  text.innerHTML = renderMarkdown(content);
+  text.innerHTML = renderMarkdown(content || "");
 
-  body.append(title, text);
+  if (content) body.appendChild(text);
+
+  const attachments = Array.isArray(options.attachments)
+    ? options.attachments
+    : [];
+
+  if (attachments.length) {
+    const attachmentList = document.createElement("div");
+    attachmentList.className = "pinsk-message-attachments";
+
+    attachments.forEach(file => {
+      const chip = document.createElement("div");
+      chip.className = "pinsk-message-file";
+      chip.textContent = "📎 " + String(file.name || "Файл");
+      attachmentList.appendChild(chip);
+    });
+
+    body.appendChild(attachmentList);
+  }
+
+  const imageSource = safeImageSource(options.image || options.imageUrl);
+
+  if (imageSource) {
+    const imageBox = document.createElement("div");
+    imageBox.className = "pinsk-generated-image";
+
+    const image = document.createElement("img");
+    image.src = imageSource;
+    image.alt = "Изображение Pinsk AI";
+    image.loading = "lazy";
+
+    imageBox.appendChild(image);
+
+    const download = document.createElement("a");
+    download.href = imageSource;
+    download.download = "pinsk-ai-image.png";
+    download.className = "pinsk-image-download";
+    download.textContent = "↓ Сохранить изображение";
+
+    imageBox.appendChild(download);
+    body.appendChild(imageBox);
+  }
 
   if (isUser) item.append(body);
   else item.append(avatar, body);
@@ -761,7 +973,9 @@ async function openChat(id) {
       ? result
       : result.messages || [];
 
-    messages.forEach(message => renderMessage(message.role, message.content));
+    messages.forEach(message => {
+      renderMessage(message.role, message.content);
+    });
 
     renderHistory();
     renderPage("chat");
@@ -771,64 +985,188 @@ async function openChat(id) {
   }
 }
 
-async function sendMessage(value, options = {}) {
-  if (!currentUser) return showAuth("login");
-  if (isSending) return;
+/* =========================================
+   ОТПРАВКА СООБЩЕНИЙ
+   ========================================= */
 
-  const message = String(value || "").trim();
-  if (!message) return;
-
-  isSending = true;
+function setSendingState(value) {
+  isSending = value;
 
   const sendButton = $("sendButton");
-  if (sendButton) sendButton.disabled = true;
+  const imageButton = $("imageModeButton");
 
-  if (currentPage === "chat" && $("welcome")) {
-    $("welcome").style.display = "none";
-  }
+  if (sendButton) sendButton.disabled = value;
+  if (imageButton) imageButton.disabled = value;
+}
 
-  renderMessage("user", message);
-
-  if ($("prompt")) $("prompt").value = "";
-
+function createLoadingMessage(text = "Pinsk думает...") {
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
 
   const loadingText = document.createElement("div");
   loadingText.className = "message-content";
-  loadingText.textContent = "Pinsk думает...";
+  loadingText.textContent = text;
 
   loading.appendChild(loadingText);
   $("messages")?.appendChild(loading);
 
+  const messages = $("messages");
+  if (messages) messages.scrollTop = messages.scrollHeight;
+
+  return loading;
+}
+
+async function sendMessage(value, options = {}) {
+  if (!currentUser) return showAuth("login");
+  if (isSending) return;
+
+  const message = String(value || "").trim();
+  const files = [...selectedFiles];
+
+  if (!message && !files.length) return;
+
+  if (imageMode && files.length) {
+    toast("Для генерации изображения сначала убери вложения.");
+    return;
+  }
+
+  if (imageMode && !message) {
+    toast("Опиши изображение, которое нужно создать.");
+    return;
+  }
+
+  setSendingState(true);
+
+  if (currentPage === "chat" && $("welcome")) {
+    $("welcome").style.display = "none";
+  }
+
+  renderMessage("user", message || "Проанализируй прикреплённые файлы.", {
+    attachments: files.map(file => ({ name: file.name }))
+  });
+
+  if ($("prompt")) $("prompt").value = "";
+
+  const loading = createLoadingMessage(
+    imageMode ? "Pinsk создаёт изображение..." : "Pinsk думает..."
+  );
+
   try {
-    const data = await api("/api/chat", {
-      method: "POST",
-      body: JSON.stringify({
-        message,
-        conversationId: currentChatId || makeId()
-      })
-    });
+    if (imageMode) {
+      const data = await api("/api/images/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt: message })
+      });
 
-    currentChatId = data.conversationId || currentChatId;
-    loading.remove();
+      loading.remove();
 
-    const answer = data.answer || "Нет ответа.";
-    renderMessage("assistant", answer);
+      const image = data.image || data.imageUrl || data.url ||
+        data.data?.[0]?.url || "";
 
-    if (options.speak) speakAnswer(answer);
+      const answer = data.answer || data.text ||
+        "Изображение создано.";
 
-    await loadUsage();
-    await loadHistory();
+      if (!image) {
+        throw new Error("Сервер не вернул изображение.");
+      }
+
+      renderMessage("assistant", answer, { image });
+
+      await loadUsage();
+
+    } else {
+      const formData = new FormData();
+
+      formData.append("message", message || "Проанализируй прикреплённые файлы.");
+      formData.append("conversationId", currentChatId || makeId());
+
+      files.forEach(file => {
+        formData.append("files", file, file.name);
+      });
+
+      const data = await api("/api/chat", {
+        method: "POST",
+        body: formData
+      });
+
+      currentChatId = data.conversationId || currentChatId;
+
+      loading.remove();
+
+      const answer = data.answer || "Нет ответа.";
+
+      renderMessage("assistant", answer);
+
+      if (options.speak) speakAnswer(answer);
+
+      await loadUsage();
+      await loadHistory();
+    }
+
+    if (files.length) clearSelectedFiles();
 
   } catch (error) {
     loading.remove();
-    renderMessage("assistant", "Ошибка: " + error.message);
+
+    renderMessage(
+      "assistant",
+      "Не удалось выполнить запрос: " + error.message
+    );
+
     toast(error.message);
 
   } finally {
-    isSending = false;
-    if (sendButton) sendButton.disabled = false;
+    setSendingState(false);
+  }
+}
+
+/* =========================================
+   ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+   ========================================= */
+
+function installImageModeButton() {
+  const form = $("chatForm");
+  if (!form || $("imageModeButton")) return;
+
+  const button = document.createElement("button");
+
+  button.type = "button";
+  button.id = "imageModeButton";
+  button.className = "pinsk-image-mode";
+  button.textContent = "🎨 Создать изображение";
+  button.title = "Переключить режим генерации изображений";
+
+  button.addEventListener("click", () => {
+    imageMode = !imageMode;
+
+    button.classList.toggle("active", imageMode);
+    button.textContent = imageMode
+      ? "✕ Режим изображения"
+      : "🎨 Создать изображение";
+
+    if (imageMode) {
+      if (selectedFiles.length) clearSelectedFiles();
+
+      toast("Режим генерации включён. Опиши изображение.");
+      if ($("prompt")) {
+        $("prompt").placeholder = "Опиши изображение, которое нужно создать...";
+        $("prompt").focus();
+      }
+    } else {
+      if ($("prompt")) {
+        $("prompt").placeholder = "Спроси что-нибудь...";
+      }
+
+      toast("Обычный режим чата.");
+    }
+  });
+
+  const attachButton = $("attachButton");
+
+  if (attachButton && attachButton.parentElement === form) {
+    form.insertBefore(button, attachButton);
+  } else {
+    form.appendChild(button);
   }
 }
 
@@ -896,9 +1234,11 @@ function renderPageContent(page) {
 
   if (page === "chat") {
     view.style.display = "none";
+
     if (welcome) welcome.style.display = currentChatId ? "none" : "";
     if (messages) messages.style.display = "flex";
     if (composer) composer.style.display = "";
+
     return;
   }
 
@@ -933,6 +1273,7 @@ function renderPageContent(page) {
         </div>
       </div>
     `;
+
     renderUsage();
     return;
   }
@@ -945,6 +1286,7 @@ function renderPageContent(page) {
         <div id="projectsList"></div>
       </div>
     `;
+
     renderProjects();
     $("addProject")?.addEventListener("click", createProject);
     return;
@@ -958,6 +1300,7 @@ function renderPageContent(page) {
         <div id="libraryList"></div>
       </div>
     `;
+
     renderLibrary();
     $("addLibraryItem")?.addEventListener("click", addLibraryItem);
     return;
@@ -985,6 +1328,7 @@ function renderPageContent(page) {
         <div class="voice-status" id="voiceStatus">Готов к разговору.</div>
       </div>
     `;
+
     $("voiceStart")?.addEventListener("click", startVoice);
     $("voiceStop")?.addEventListener("click", stopVoice);
     return;
@@ -1055,7 +1399,7 @@ function renderAnalysis() {
   view.innerHTML = `
     <div class="page-content">
       <h2>Анализ данных</h2>
-      <p>Загрузи CSV, TXT или JSON-файл и задай вопрос по его содержимому.</p>
+      <p>Загрузи CSV, TXT, JSON или MD-файл и задай вопрос по его содержимому.</p>
 
       <div class="dashboard-card">
         <label for="analysisFile">Выбрать файл</label>
@@ -1130,10 +1474,7 @@ async function runAnalysis() {
 
     const data = await api("/api/analysis", {
       method: "POST",
-      body: JSON.stringify({
-        content,
-        question
-      })
+      body: JSON.stringify({ content, question })
     });
 
     result.innerHTML = renderMarkdown(data.answer || "Нет результата.");
@@ -1588,12 +1929,16 @@ function initEvents() {
   });
 
   $("attachButton")?.addEventListener("click", () => {
+    if (imageMode) {
+      toast("В режиме генерации изображения вложения отключены.");
+      return;
+    }
+
     $("fileInput")?.click();
   });
 
-  $("fileInput")?.addEventListener("change", () => {
-    const file = $("fileInput")?.files?.[0];
-    if (file) toast("Выбран файл: " + file.name);
+  $("fileInput")?.addEventListener("change", event => {
+    addSelectedFiles(event.target.files);
   });
 
   $("mobileMenu")?.addEventListener("click", () => {
@@ -1811,6 +2156,226 @@ function installPinskUiFixes() {
       margin: 12px 0;
       color: #f2f2f5;
     }
+
+    /* Приветственный экран */
+    #welcome .suggestions {
+      display: none !important;
+    }
+
+    /* Кнопка генерации */
+    .pinsk-image-mode {
+      min-height: 40px;
+      padding: 8px 12px;
+      flex: 0 0 auto;
+      border: 1px solid #514875;
+      border-radius: 11px;
+      color: #ded8ff;
+      background: #292638;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      transition: .2s;
+    }
+
+    .pinsk-image-mode:hover,
+    .pinsk-image-mode.active {
+      background: #51418c;
+      border-color: #9c89ff;
+      color: #fff;
+    }
+
+    /* Предпросмотр вложений */
+    .pinsk-attachment-preview {
+      display: none;
+      flex-wrap: wrap;
+      gap: 9px;
+      width: 100%;
+      padding: 10px 0;
+    }
+
+    .pinsk-attachment-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 150px;
+      max-width: 230px;
+      padding: 9px;
+      border: 1px solid #454052;
+      border-radius: 12px;
+      background: #211f2b;
+      color: #f1eff8;
+    }
+
+    .pinsk-attachment-thumb {
+      width: 46px;
+      height: 46px;
+      flex: 0 0 46px;
+      border-radius: 8px;
+      object-fit: cover;
+    }
+
+    .pinsk-attachment-icon {
+      width: 46px;
+      height: 46px;
+      flex: 0 0 46px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: #39324f;
+      color: #d9ceff;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .pinsk-attachment-info {
+      min-width: 0;
+      padding-right: 14px;
+    }
+
+    .pinsk-attachment-name {
+      overflow: hidden;
+      max-width: 135px;
+      font-size: 12px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pinsk-attachment-size {
+      margin-top: 4px;
+      color: #aaa5b8;
+      font-size: 11px;
+    }
+
+    .pinsk-attachment-remove {
+      position: absolute;
+      top: 3px;
+      right: 5px;
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 50%;
+      color: #fff;
+      background: #51475e;
+      cursor: pointer;
+      font-size: 17px;
+      line-height: 20px;
+    }
+
+    .pinsk-attachment-remove:hover {
+      background: #a34461;
+    }
+
+    /* Вложения внутри сообщений */
+    .pinsk-message-attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 9px;
+    }
+
+    .pinsk-message-file {
+      padding: 7px 10px;
+      border: 1px solid #514875;
+      border-radius: 9px;
+      background: #292638;
+      color: #e8e4ff;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    /* Сгенерированные изображения */
+    .pinsk-generated-image {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .pinsk-generated-image img {
+      display: block;
+      width: 100%;
+      max-width: 640px;
+      max-height: 650px;
+      object-fit: contain;
+      border-radius: 14px;
+      background: #17151f;
+    }
+
+    .pinsk-image-download {
+      display: inline-flex;
+      align-items: center;
+      padding: 9px 13px;
+      border: 1px solid #514875;
+      border-radius: 9px;
+      color: #e8e4ff;
+      background: #292638;
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .pinsk-image-download:hover {
+      background: #39324f;
+    }
+
+    .loading-message {
+      opacity: .75;
+    }
+
+    /* Мобильная версия */
+    @media (max-width: 760px) {
+      .pinsk-attachment-preview {
+        gap: 6px;
+        padding: 8px 0;
+      }
+
+      .pinsk-attachment-item {
+        min-width: 0;
+        max-width: calc(50% - 4px);
+        flex: 1 1 calc(50% - 4px);
+      }
+
+      .pinsk-attachment-name {
+        max-width: 100px;
+      }
+
+      .pinsk-image-mode {
+        min-height: 38px;
+        padding: 7px 9px;
+        font-size: 11px;
+      }
+
+      .pinsk-generated-image img {
+        max-height: 480px;
+      }
+
+      .message-content {
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .message-text {
+        overflow-wrap: anywhere;
+      }
+
+      #chatForm {
+        gap: 5px;
+      }
+
+      #prompt {
+        min-width: 0;
+      }
+
+      .voice-inline-button {
+        width: 38px;
+        height: 38px;
+        flex-basis: 38px;
+        margin: 0 2px;
+      }
+    }
   `;
 
   document.head.appendChild(style);
@@ -1826,6 +2391,8 @@ async function init() {
   installPinskUiFixes();
   initEvents();
   installVoiceButton();
+  installImageModeButton();
+  renderAttachmentPreview();
   updateProfile();
 
   const authResult = await checkAuth();
