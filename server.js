@@ -46,6 +46,14 @@ if (
   fs.existsSync(OLD_DB_PATH)
 ) {
   fs.copyFileSync(OLD_DB_PATH, DB_PATH);
+
+  const oldWal = OLD_DB_PATH + "-wal";
+  const newWal = DB_PATH + "-wal";
+
+  if (fs.existsSync(oldWal)) {
+    fs.copyFileSync(oldWal, newWal);
+  }
+
   console.log("Старая база Pinsk перенесена.");
 }
 
@@ -131,8 +139,16 @@ db.prepare(`
 
 const LIMITS = {
   FREE: { messages: 100, images: 5, files: 5 },
-  PRO: { messages: Infinity, images: Infinity, files: Infinity },
-  OWNER: { messages: Infinity, images: Infinity, files: Infinity }
+  PRO: {
+    messages: Infinity,
+    images: Infinity,
+    files: Infinity
+  },
+  OWNER: {
+    messages: Infinity,
+    images: Infinity,
+    files: Infinity
+  }
 };
 
 const PLAN_FEATURES = {
@@ -143,6 +159,7 @@ const PLAN_FEATURES = {
     "История чатов",
     "Базовые возможности Pinsk AI"
   ],
+
   PRO: [
     "Безлимитные сообщения",
     "Безлимитная генерация изображений",
@@ -152,6 +169,7 @@ const PLAN_FEATURES = {
     "Голосовое общение",
     "Расширенные инструменты"
   ],
+
   OWNER: [
     "Все возможности Pinsk PRO",
     "Безлимитное использование",
@@ -192,6 +210,7 @@ function verifyPassword(password, stored) {
   if (!stored || typeof stored !== "string") return false;
 
   const [salt, hash] = stored.split(":");
+
   if (!salt || !hash) return false;
 
   const actual = Buffer.from(passwordHash(password, salt), "hex");
@@ -305,11 +324,13 @@ function auth(req, res, next) {
 
     const user = db.prepare(`
       SELECT id, name, email, role, created_at, is_blocked
-      FROM users WHERE id = ?
+      FROM users
+      WHERE id = ?
     `).get(session.user_id);
 
     if (!user) {
       clearSessionCookie(res, req);
+
       return res.status(401).json({
         error: "Аккаунт не найден."
       });
@@ -336,7 +357,6 @@ function auth(req, res, next) {
       user.role = "OWNER";
     }
 
-    // Продление сессии при активности.
     const newExpiry = Date.now() + SESSION_DURATION;
 
     db.prepare(`
@@ -375,9 +395,17 @@ function limitsFor(user) {
 
 function serializableLimits(limits) {
   return {
-    messages: limits.messages === Infinity ? "unlimited" : limits.messages,
-    images: limits.images === Infinity ? "unlimited" : limits.images,
-    files: limits.files === Infinity ? "unlimited" : limits.files
+    messages: limits.messages === Infinity
+      ? "unlimited"
+      : limits.messages,
+
+    images: limits.images === Infinity
+      ? "unlimited"
+      : limits.images,
+
+    files: limits.files === Infinity
+      ? "unlimited"
+      : limits.files
   };
 }
 
@@ -385,9 +413,12 @@ function serializableLimits(limits) {
 
 app.post("/api/auth/register", (req, res) => {
   try {
-    const name = String(req.body.name || "").trim();
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const password = String(req.body.password || "");
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const password = String(req.body?.password || "");
 
     if (name.length < 2 || name.length > 50) {
       return res.status(400).json({
@@ -423,7 +454,8 @@ app.post("/api/auth/register", (req, res) => {
 
     const user = db.prepare(`
       SELECT id, name, email, role, created_at
-      FROM users WHERE id = ?
+      FROM users
+      WHERE id = ?
     `).get(id);
 
     issueSession(user, res, req);
@@ -437,6 +469,13 @@ app.post("/api/auth/register", (req, res) => {
 
   } catch (error) {
     console.error("Registration error:", error);
+
+    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+      return res.status(409).json({
+        error: "Аккаунт уже существует. Используй вход."
+      });
+    }
+
     res.status(500).json({
       error: "Не удалось создать аккаунт."
     });
@@ -447,8 +486,11 @@ app.post("/api/auth/register", (req, res) => {
 
 app.post("/api/auth/login", (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const password = String(req.body.password || "");
+    const email = String(req.body?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const password = String(req.body?.password || "");
 
     const user = db.prepare(
       "SELECT * FROM users WHERE email = ?"
@@ -484,7 +526,10 @@ app.post("/api/auth/login", (req, res) => {
 
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ error: "Ошибка входа." });
+
+    res.status(500).json({
+      error: "Ошибка входа."
+    });
   }
 });
 
@@ -495,7 +540,8 @@ app.get("/api/auth/me", auth, (req, res) => {
 
   const user = db.prepare(`
     SELECT id, name, email, role, created_at, is_blocked
-    FROM users WHERE id = ?
+    FROM users
+    WHERE id = ?
   `).get(req.user.id);
 
   if (!user) {
@@ -504,7 +550,9 @@ app.get("/api/auth/me", auth, (req, res) => {
     });
   }
 
-  res.json({ user: publicUser(user) });
+  res.json({
+    user: publicUser(user)
+  });
 });
 
 // LOGOUT
@@ -519,7 +567,9 @@ app.post("/api/auth/logout", (req, res) => {
 
   clearSessionCookie(res, req);
 
-  res.json({ success: true });
+  res.json({
+    success: true
+  });
 });
 
 db.prepare("DELETE FROM sessions WHERE expires_at <= ?")
@@ -556,69 +606,90 @@ app.get("/api/admin/users", auth, requireOwner, (req, res) => {
 });
 
 app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
-  const id = String(req.params.id);
+  try {
+    const id = String(req.params.id);
 
-  const target = db.prepare(
-    "SELECT * FROM users WHERE id = ?"
-  ).get(id);
+    const target = db.prepare(
+      "SELECT * FROM users WHERE id = ?"
+    ).get(id);
 
-  if (!target) {
-    return res.status(404).json({
-      error: "Пользователь не найден."
-    });
-  }
-
-  if (target.role === "OWNER" || target.id === req.user.id) {
-    return res.status(403).json({
-      error: "Нельзя изменять аккаунт владельца."
-    });
-  }
-
-  const updates = {};
-
-  if (req.body.role !== undefined) {
-    if (!["FREE", "PRO"].includes(req.body.role)) {
-      return res.status(400).json({
-        error: "Можно назначить только FREE или PRO."
+    if (!target) {
+      return res.status(404).json({
+        error: "Пользователь не найден."
       });
     }
 
-    updates.role = req.body.role;
-  }
-
-  if (req.body.is_blocked !== undefined) {
-    if (typeof req.body.is_blocked !== "boolean") {
-      return res.status(400).json({
-        error: "Некорректное значение блокировки."
+    if (target.role === "OWNER" || target.id === req.user.id) {
+      return res.status(403).json({
+        error: "Нельзя изменять аккаунт владельца."
       });
     }
 
-    updates.is_blocked = req.body.is_blocked ? 1 : 0;
-  }
+    const updates = {};
 
-  if (!Object.keys(updates).length) {
-    return res.status(400).json({
-      error: "Нет изменений."
+    if (req.body.role !== undefined) {
+      if (!["FREE", "PRO"].includes(req.body.role)) {
+        return res.status(400).json({
+          error: "Можно назначить только FREE или PRO."
+        });
+      }
+
+      updates.role = req.body.role;
+    }
+
+    if (req.body.is_blocked !== undefined) {
+      if (typeof req.body.is_blocked !== "boolean") {
+        return res.status(400).json({
+          error: "Некорректное значение блокировки."
+        });
+      }
+
+      updates.is_blocked = req.body.is_blocked ? 1 : 0;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({
+        error: "Нет изменений."
+      });
+    }
+
+    const set = Object.keys(updates)
+      .map(key => `${key} = @${key}`)
+      .join(", ");
+
+    // Исправлено: именованные параметры SQL.
+    db.prepare(`
+      UPDATE users
+      SET ${set}
+      WHERE id = @id
+    `).run({
+      ...updates,
+      id
+    });
+
+    if (updates.is_blocked === 1) {
+      db.prepare("DELETE FROM sessions WHERE user_id = ?")
+        .run(id);
+    }
+
+    const updated = db.prepare(`
+      SELECT id, name, email, role, is_blocked, created_at
+      FROM users
+      WHERE id = ?
+    `).get(id);
+
+    res.json({
+      success: true,
+      user: updated
+    });
+
+  } catch (error) {
+    console.error("Admin update error:", error);
+
+    res.status(500).json({
+      error: "Не удалось обновить пользователя."
     });
   }
-
-  const set = Object.keys(updates)
-    .map(key => `${key} = @${key}`)
-    .join(", ");
-
-  db.prepare(`UPDATE users SET ${set} WHERE id = ?`)
-    .run(...Object.values(updates), id);
-
-  if (updates.is_blocked === 1) {
-    db.prepare("DELETE FROM sessions WHERE user_id = ?").run(id);
-  }
-
-  const updated = db.prepare(`
-    SELECT id, name, email, role, is_blocked, created_at
-    FROM users WHERE id = ?
-  `).get(id);
-
-  res.json({ success: true, user: updated });
 });
 
 // USAGE
@@ -639,10 +710,14 @@ const reserveMessage = db.transaction(userId => {
   const date = usageDate();
   const current = getUsage(userId);
 
-  if (current.messages >= LIMITS.FREE.messages) return false;
+  if (current.messages >= LIMITS.FREE.messages) {
+    return false;
+  }
 
   db.prepare(`
-    INSERT INTO daily_usage (user_id, usage_date, messages, images, files)
+    INSERT INTO daily_usage (
+      user_id, usage_date, messages, images, files
+    )
     VALUES (?, ?, 1, 0, 0)
     ON CONFLICT(user_id, usage_date)
     DO UPDATE SET messages = messages + 1
@@ -654,7 +729,10 @@ const reserveMessage = db.transaction(userId => {
 function releaseMessage(userId) {
   db.prepare(`
     UPDATE daily_usage
-    SET messages = CASE WHEN messages > 0 THEN messages - 1 ELSE 0 END
+    SET messages = CASE
+      WHEN messages > 0 THEN messages - 1
+      ELSE 0
+    END
     WHERE user_id = ? AND usage_date = ?
   `).run(userId, usageDate());
 }
@@ -682,6 +760,7 @@ app.get("/api/plans", (req, res) => {
         limits: serializableLimits(LIMITS.FREE),
         features: PLAN_FEATURES.FREE
       },
+
       PRO: {
         name: "Pinsk PRO",
         monthlyPrice: 2990,
@@ -690,6 +769,7 @@ app.get("/api/plans", (req, res) => {
         limits: serializableLimits(LIMITS.PRO),
         features: PLAN_FEATURES.PRO
       },
+
       OWNER: {
         name: "OWNER",
         price: 0,
@@ -697,6 +777,7 @@ app.get("/api/plans", (req, res) => {
         features: PLAN_FEATURES.OWNER
       }
     },
+
     paymentEnabled: false
   });
 });
@@ -717,13 +798,16 @@ app.get("/api/usage", auth, (req, res) => {
     date: usageDate(),
     used,
     limits: serializableLimits(limits),
+
     remaining: {
       messages: limits.messages === Infinity
         ? "unlimited"
         : Math.max(0, limits.messages - used.messages),
+
       images: limits.images === Infinity
         ? "unlimited"
         : Math.max(0, limits.images - used.images),
+
       files: limits.files === Infinity
         ? "unlimited"
         : Math.max(0, limits.files - used.files)
@@ -771,7 +855,8 @@ app.get("/api/history", auth, (req, res) => {
 
 app.get("/api/history/:id", auth, (req, res) => {
   const conversation = db.prepare(`
-    SELECT id FROM conversations
+    SELECT id
+    FROM conversations
     WHERE id = ? AND user_id = ?
   `).get(req.params.id, req.user.id);
 
@@ -792,7 +877,7 @@ app.get("/api/history/:id", auth, (req, res) => {
 // MEMORY
 
 app.post("/api/memory", auth, (req, res) => {
-  const content = String(req.body.content || "").trim();
+  const content = String(req.body?.content || "").trim();
 
   if (!content) {
     return res.status(400).json({
@@ -826,16 +911,22 @@ app.delete("/api/memory/:id", auth, (req, res) => {
     WHERE id = ? AND user_id = ?
   `).run(req.params.id, req.user.id);
 
-  res.json({ success: true });
+  res.json({
+    success: true
+  });
 });
 
 // FILE UPLOAD
 
 const uploadDir = path.join(DATA_DIR, "uploads");
+
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+
   filename: (req, file, cb) => {
     const safeName = path.basename(file.originalname)
       .replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -846,6 +937,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+
   limits: {
     fileSize: 10 * 1024 * 1024,
     files: 5
@@ -869,7 +961,11 @@ app.post("/api/upload", auth, upload.array("files", 5), (req, res) => {
     usage.files + files.length > limits.files
   ) {
     for (const file of files) {
-      fs.unlinkSync(file.path);
+      try {
+        fs.unlinkSync(file.path);
+      } catch (error) {
+        console.error("File cleanup error:", error);
+      }
     }
 
     return res.status(429).json({
@@ -886,6 +982,7 @@ app.post("/api/upload", auth, upload.array("files", 5), (req, res) => {
 
   res.json({
     success: true,
+
     files: files.map(file => ({
       name: file.originalname,
       size: file.size,
@@ -896,14 +993,25 @@ app.post("/api/upload", auth, upload.array("files", 5), (req, res) => {
 
 // AI
 
-const ai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  ...(process.env.OPENAI_BASE_URL
-    ? { baseURL: process.env.OPENAI_BASE_URL }
-    : {})
-});
+function getAIClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+
+  return new OpenAI({
+    apiKey,
+
+    ...(process.env.OPENAI_BASE_URL
+      ? { baseURL: process.env.OPENAI_BASE_URL }
+      : {})
+  });
+}
 
 async function askAI(messages) {
+  const ai = getAIClient();
+
   const response = await ai.chat.completions.create({
     model: MODEL,
     messages
@@ -926,9 +1034,10 @@ app.post("/api/chat", auth, async (req, res) => {
       });
     }
 
-    const message = String(req.body.message || "").trim();
+    const message = String(req.body?.message || "").trim();
+
     const conversationId = String(
-      req.body.conversationId || crypto.randomUUID()
+      req.body?.conversationId || crypto.randomUUID()
     );
 
     if (!message) {
@@ -958,16 +1067,22 @@ app.post("/api/chat", auth, async (req, res) => {
 
     const conversation = db.prepare(`
       SELECT id, user_id
-      FROM conversations WHERE id = ?
+      FROM conversations
+      WHERE id = ?
     `).get(conversationId);
 
     if (conversation && conversation.user_id !== userId) {
       if (conversation.user_id === null) {
         db.prepare(`
-          UPDATE conversations SET user_id = ? WHERE id = ?
+          UPDATE conversations
+          SET user_id = ?
+          WHERE id = ?
         `).run(userId, conversationId);
       } else {
-        if (reserved) releaseMessage(userId);
+        if (reserved) {
+          releaseMessage(userId);
+          reserved = false;
+        }
 
         return res.status(403).json({
           error: "Нет доступа к этому чату."
@@ -991,13 +1106,16 @@ app.post("/api/chat", auth, async (req, res) => {
       SELECT role, content
       FROM messages
       WHERE conversation_id = ?
-      ORDER BY id DESC LIMIT 15
+      ORDER BY id DESC
+      LIMIT 15
     `).all(conversationId).reverse();
 
     const savedMemories = db.prepare(`
-      SELECT content FROM memories
+      SELECT content
+      FROM memories
       WHERE user_id = ?
-      ORDER BY id DESC LIMIT 30
+      ORDER BY id DESC
+      LIMIT 30
     `).all(userId);
 
     const context = savedMemories
@@ -1007,11 +1125,13 @@ app.post("/api/chat", auth, async (req, res) => {
     const answer = await askAI([
       {
         role: "system",
+
         content:
           "Ты Pinsk — ИИ-ассистент. Отвечай полезно, точно и на языке пользователя. " +
           "Не выдумывай факты. Учитывай сохранённую память, если она относится к вопросу.\n\n" +
           "ПАМЯТЬ:\n" + context.slice(0, 10000)
       },
+
       ...recentMessages
     ]);
 
@@ -1026,12 +1146,15 @@ app.post("/api/chat", auth, async (req, res) => {
       answer,
       conversationId,
       model: MODEL,
+
       usage: {
         plan: req.user.role,
         messagesUsed: usage.messages,
+
         messagesLimit: limits.messages === Infinity
           ? "unlimited"
           : limits.messages,
+
         messagesRemaining: limits.messages === Infinity
           ? "unlimited"
           : Math.max(0, limits.messages - usage.messages)
@@ -1041,7 +1164,9 @@ app.post("/api/chat", auth, async (req, res) => {
   } catch (error) {
     console.error("Pinsk AI error:", error);
 
-    if (reserved) releaseMessage(userId);
+    if (reserved) {
+      releaseMessage(userId);
+    }
 
     res.status(500).json({
       error: "Ошибка ИИ-сервера. Проверь настройки модели и API."
@@ -1059,9 +1184,10 @@ app.post("/api/analysis", auth, async (req, res) => {
       });
     }
 
-    const content = String(req.body.content || "").trim();
+    const content = String(req.body?.content || "").trim();
+
     const question = String(
-      req.body.question ||
+      req.body?.question ||
       "Проанализируй эти данные и сделай выводы."
     ).trim();
 
@@ -1080,18 +1206,23 @@ app.post("/api/analysis", auth, async (req, res) => {
     const answer = await askAI([
       {
         role: "system",
+
         content:
           "Ты аналитик данных Pinsk. Анализируй предоставленные таблицы и текст. " +
           "Находи закономерности, ошибки, тенденции, сравнения и делай выводы. " +
           "Не выдумывай отсутствующие значения."
       },
+
       {
         role: "user",
         content: question + "\n\nДАННЫЕ:\n" + content
       }
     ]);
 
-    res.json({ success: true, answer });
+    res.json({
+      success: true,
+      answer
+    });
 
   } catch (error) {
     console.error("Data analysis error:", error);
@@ -1103,13 +1234,33 @@ app.post("/api/analysis", auth, async (req, res) => {
 });
 
 // WEBSITE
-
-app.use(express.static(__dirname, {
-  index: "index.html"
-}));
+// Не публикуем всю папку проекта через express.static.
+// Это защищает базу SQLite, .env и другие служебные файлы.
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.get("/index.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
+app.get("/style.css", (req, res) => {
+  res.sendFile(path.join(__dirname, "style.css"));
+});
+
+app.get("/app.js", (req, res) => {
+  res.sendFile(path.join(__dirname, "app.js"));
+});
+
+app.get("/favicon.png", (req, res) => {
+  const faviconPath = path.join(__dirname, "favicon.png");
+
+  if (!fs.existsSync(faviconPath)) {
+    return res.status(404).end();
+  }
+
+  res.sendFile(faviconPath);
 });
 
 // ERROR HANDLER
@@ -1117,7 +1268,9 @@ app.get("/", (req, res) => {
 app.use((error, req, res, next) => {
   console.error("Express error:", error);
 
-  if (res.headersSent) return next(error);
+  if (res.headersSent) {
+    return next(error);
+  }
 
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
@@ -1132,7 +1285,7 @@ app.use((error, req, res, next) => {
 
 // START
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log("================================");
   console.log("          PINSK AI");
   console.log("================================");
@@ -1145,3 +1298,21 @@ app.listen(PORT, () => {
   console.log("Загрузка файлов: включена");
   console.log("================================");
 });
+
+function shutdown() {
+  console.log("Остановка Pinsk AI...");
+
+  server.close(() => {
+    try {
+      db.pragma("wal_checkpoint(TRUNCATE)");
+      db.close();
+      process.exit(0);
+    } catch (error) {
+      console.error("Ошибка закрытия базы:", error);
+      process.exit(1);
+    }
+  });
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
