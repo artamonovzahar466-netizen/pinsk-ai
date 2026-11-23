@@ -1,22 +1,25 @@
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#101014">
   <meta name="description" content="Pinsk AI — интеллектуальный помощник">
   <title>Pinsk AI</title>
-
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="app">
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
     <aside class="sidebar" id="sidebar">
       <div class="brand">
         <div class="brand-icon">P</div>
         <span>Pinsk</span>
         <span class="brand-ai">AI</span>
+        <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Закрыть меню">×</button>
       </div>
 
       <button class="new-chat" id="newChat" type="button">＋ Новый чат</button>
@@ -60,8 +63,11 @@
 
     <main class="main">
       <header class="topbar">
-        <button class="mobile-menu" id="mobileMenu" type="button">☰</button>
-        <div class="topbar-title" id="pageTitle">Pinsk AI</div>
+        <div class="topbar-left">
+          <button class="mobile-menu" id="mobileMenu" type="button" aria-label="Открыть меню">☰</button>
+          <div class="topbar-title" id="pageTitle">Pinsk AI</div>
+        </div>
+
         <div class="topbar-actions">
           <button class="icon-button" id="settingsButton" title="Настройки" type="button">⚙</button>
           <button class="top-upgrade" id="topUpgrade" type="button">Перейти на PRO ↗</button>
@@ -82,19 +88,16 @@
               <strong>Написать текст</strong>
               <small>Письма, статьи и идеи</small>
             </button>
-
             <button class="suggestion" data-prompt="Объясни сложную тему простыми словами" type="button">
               <span>◈</span>
               <strong>Объяснить тему</strong>
               <small>Понятные ответы</small>
             </button>
-
             <button class="suggestion" data-prompt="Помоги написать программный код" type="button">
               <span>⌘</span>
               <strong>Написать код</strong>
               <small>Программирование</small>
             </button>
-
             <button class="suggestion" data-prompt="Придумай интересную идею для проекта" type="button">
               <span>✧</span>
               <strong>Найти идею</strong>
@@ -108,6 +111,8 @@
 
       <footer class="composer-area" id="composerArea">
         <form class="composer" id="chatForm">
+          <div id="attachmentPreview" class="attachment-preview" aria-live="polite"></div>
+
           <textarea
             id="prompt"
             rows="1"
@@ -121,11 +126,9 @@
               <button type="button" class="tool-button" id="reasoningButton">◈ <span>Глубокое мышление</span></button>
               <input type="file" id="fileInput" hidden multiple>
             </div>
-
-            <button type="submit" class="send-button" id="sendButton" title="Отправить">↑</button>
+            <button type="submit" class="send-button" id="sendButton" title="Отправить" aria-label="Отправить">↑</button>
           </div>
         </form>
-
         <div class="disclaimer">Pinsk может допускать ошибки. Проверяйте важную информацию.</div>
       </footer>
     </main>
