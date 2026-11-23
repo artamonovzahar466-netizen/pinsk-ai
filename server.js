@@ -9,6 +9,10 @@ const Database = require("better-sqlite3");
 const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
+const XLSX = require("xlsx");
 
 dotenv.config();
 
@@ -16,7 +20,10 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
+const IMAGE_MODEL = process.env.IMAGE_MODEL || "gemini-3.1-flash-image";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
+
+const API_KEY = process.env.OPENAI_API_KEY;
 
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -79,7 +86,7 @@ const PLAN_FEATURES = {
   ],
   PRO: [
     "Безлимитные сообщения",
-    "Безлимитная генерация изображений (при подключённой модели)",
+    "Безлимитная генерация изображений",
     "Безлимитная обработка файлов",
     "Проекты и библиотека",
     "Глубокое рассуждение",
@@ -104,6 +111,128 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: "25mb"
+}));
+
+// ==========================================
+// ЗАГРУЗКА ФАЙЛОВ
+// ==========================================
+
+const MAX_FILE_SIZE = 12 * 1024 * 1024;
+const MAX_FILES = 5;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_FILE_SIZE,
+    files: MAX_FILES
+  },
+  fileFilter(req, file, callback) {
+    const extension = path.extname(file.originalname).toLowerCase();
+
+    const allowed = [
+      ".png", ".jpg", ".jpeg", ".webp", ".gif",
+      ".pdf",
+      ".docx",
+      ".xlsx", ".xls",
+      ".csv",
+      ".txt", ".md", ".json",
+      ".html", ".xml",
+      ".log"
+    ];
+
+    if (!allowed.includes(extension)) {
+      return callback(
+        new Error("Формат файла не поддерживается: " + extension)
+      );
+    }
+
+    callback(null, true);
+  }
+});
+
+function safeFileName(name) {
+  return path.basename(String(name || "file"))
+    .replace(/[^\p{L}\p{N}._ -]/gu, "_")
+    .slice(0, 150);
+}
+
+function isImage(file) {
+  return [
+    ".png", ".jpg", ".jpeg", ".webp", ".gif"
+  ].includes(path.extname(file.originalname).toLowerCase());
+}
+
+async function extractFileText(file) {
+  const extension = path.extname(file.originalname).toLowerCase();
+
+  if (isImage(file)) {
+    return "";
+  }
+
+  if (extension === ".pdf") {
+    const result = await pdfParse(file.buffer);
+    return result.text || "";
+  }
+
+  if (extension === ".docx") {
+    const result = await mammoth.extractRawText({
+      buffer: file.buffer
+    });
+    return result.value || "";
+  }
+
+  if (extension === ".xlsx" || extension === ".xls") {
+    const workbook = XLSX.read(file.buffer, {
+      type: "buffer"
+    });
+
+    return workbook.SheetNames.map(sheetName => {
+      const sheet = workbook.Sheets[sheetName];
+
+      return (
+        "Лист: " + sheetName + "\n" +
+        XLSX.utils.sheet_to_csv(sheet)
+      );
+    }).join("\n\n");
+  }
+
+  if (extension === ".csv") {
+    const workbook = XLSX.read(file.buffer, {
+      type: "buffer",
+      raw: false
+    });
+
+    return workbook.SheetNames.map(sheetName => {
+      return (
+        "Лист: " + sheetName + "\n" +
+        XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
+      );
+    }).join("\n\n");
+  }
+
+  return file.buffer.toString("utf8");
+}
+
+function fileMime(file) {
+  const extension = path.extname(file.originalname).toLowerCase();
+
+  const types = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif"
+  };
+
+  return types[extension] || file.mimetype || "application/octet-stream";
+}
+
+// ==========================================
+// БАЗА ДАННЫХ
+// ==========================================
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -173,13 +302,15 @@ if (!hasColumn("users", "is_blocked")) {
   `);
 }
 
-// Назначение владельца по подтверждённому email.
-// Существующий аккаунт сохраняется.
 db.prepare(`
   UPDATE users
   SET role = 'OWNER'
   WHERE lower(email) = ?
 `).run(OWNER_EMAIL);
+
+// ==========================================
+// ОБЩИЕ ФУНКЦИИ
+// ==========================================
 
 function usageDate() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -191,7 +322,9 @@ function usageDate() {
 }
 
 function hashToken(token) {
-  return crypto.createHash("sha256").update(token).digest("hex");
+  return crypto.createHash("sha256")
+    .update(token)
+    .digest("hex");
 }
 
 function passwordHash(password, salt) {
@@ -207,6 +340,7 @@ function verifyPassword(password, stored) {
   if (!stored || typeof stored !== "string") return false;
 
   const [salt, hash] = stored.split(":");
+
   if (!salt || !hash) return false;
 
   const actual = Buffer.from(passwordHash(password, salt), "hex");
@@ -218,6 +352,7 @@ function verifyPassword(password, stored) {
 
 function cookieToken(req) {
   const cookies = (req.headers.cookie || "").split(";");
+
   const item = cookies.find(part =>
     part.trim().startsWith("pinsk_session=")
   );
@@ -272,6 +407,10 @@ function publicUser(user) {
   };
 }
 
+// ==========================================
+// АВТОРИЗАЦИЯ
+// ==========================================
+
 function auth(req, res, next) {
   try {
     const token = cookieToken(req);
@@ -290,6 +429,7 @@ function auth(req, res, next) {
 
     if (!session) {
       clearSessionCookie(res, req);
+
       return res.status(401).json({
         error: "Сессия истекла. Войди в аккаунт."
       });
@@ -303,19 +443,26 @@ function auth(req, res, next) {
 
     if (!user) {
       clearSessionCookie(res, req);
+
       return res.status(401).json({
         error: "Аккаунт не найден."
       });
     }
 
-    if (user.email.toLowerCase() === OWNER_EMAIL && user.role !== "OWNER") {
+    if (
+      user.email.toLowerCase() === OWNER_EMAIL &&
+      user.role !== "OWNER"
+    ) {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
+
       user.role = "OWNER";
     }
 
     if (user.is_blocked) {
-      db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
+      db.prepare("DELETE FROM sessions WHERE user_id = ?")
+        .run(user.id);
+
       clearSessionCookie(res, req);
 
       return res.status(403).json({
@@ -328,6 +475,7 @@ function auth(req, res, next) {
 
   } catch (error) {
     console.error("Auth error:", error);
+
     res.status(500).json({
       error: "Ошибка проверки авторизации."
     });
@@ -346,7 +494,9 @@ function requireOwner(req, res, next) {
 
 function issueSession(user, res, req) {
   const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+
+  const expiresAt =
+    Date.now() + 30 * 24 * 60 * 60 * 1000;
 
   db.prepare(`
     INSERT INTO sessions (token_hash, user_id, expires_at)
@@ -356,12 +506,17 @@ function issueSession(user, res, req) {
   setSessionCookie(res, token, req);
 }
 
+// ==========================================
 // РЕГИСТРАЦИЯ
+// ==========================================
 
 app.post("/api/auth/register", (req, res) => {
   try {
     const name = String(req.body.name || "").trim();
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+
     const password = String(req.body.password || "");
 
     if (name.length < 2 || name.length > 50) {
@@ -371,7 +526,9 @@ app.post("/api/auth/register", (req, res) => {
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: "Введи правильный email." });
+      return res.status(400).json({
+        error: "Введи правильный email."
+      });
     }
 
     if (password.length < 8 || password.length > 128) {
@@ -412,15 +569,23 @@ app.post("/api/auth/register", (req, res) => {
 
   } catch (error) {
     console.error("Registration error:", error);
-    res.status(500).json({ error: "Не удалось создать аккаунт." });
+
+    res.status(500).json({
+      error: "Не удалось создать аккаунт."
+    });
   }
 });
 
+// ==========================================
 // ВХОД
+// ==========================================
 
 app.post("/api/auth/login", (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
+
     const password = String(req.body.password || "");
 
     const user = db.prepare(
@@ -442,6 +607,7 @@ app.post("/api/auth/login", (req, res) => {
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
+
       user.role = "OWNER";
     }
 
@@ -456,29 +622,39 @@ app.post("/api/auth/login", (req, res) => {
 
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({ error: "Ошибка входа." });
+
+    res.status(500).json({
+      error: "Ошибка входа."
+    });
   }
 });
 
+// ==========================================
 // ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ
+// ==========================================
 
 app.get("/api/auth/me", auth, (req, res) => {
   res.setHeader("Cache-Control", "no-store");
 
-  // Повторно читаем актуальную роль непосредственно из базы.
   const user = db.prepare(`
     SELECT id, name, email, role, created_at, is_blocked
     FROM users WHERE id = ?
   `).get(req.user.id);
 
   if (!user) {
-    return res.status(401).json({ error: "Аккаунт не найден." });
+    return res.status(401).json({
+      error: "Аккаунт не найден."
+    });
   }
 
-  res.json({ user: publicUser(user) });
+  res.json({
+    user: publicUser(user)
+  });
 });
 
+// ==========================================
 // ВЫХОД
+// ==========================================
 
 app.post("/api/auth/logout", (req, res) => {
   const token = cookieToken(req);
@@ -489,13 +665,16 @@ app.post("/api/auth/logout", (req, res) => {
   }
 
   clearSessionCookie(res, req);
+
   res.json({ success: true });
 });
 
 db.prepare("DELETE FROM sessions WHERE expires_at <= ?")
   .run(Date.now());
 
-// АДМИН: СТАТИСТИКА
+// ==========================================
+// АДМИН-ПАНЕЛЬ
+// ==========================================
 
 app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
   const stats = db.prepare(`
@@ -511,8 +690,6 @@ app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
   res.json(stats);
 });
 
-// АДМИН: ПОЛЬЗОВАТЕЛИ
-
 app.get("/api/admin/users", auth, requireOwner, (req, res) => {
   const search = String(req.query.search || "").trim();
 
@@ -527,8 +704,6 @@ app.get("/api/admin/users", auth, requireOwner, (req, res) => {
   res.json(users);
 });
 
-// АДМИН: ИЗМЕНЕНИЕ ПОЛЬЗОВАТЕЛЯ
-
 app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   const id = String(req.params.id);
 
@@ -537,7 +712,9 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   ).get(id);
 
   if (!target) {
-    return res.status(404).json({ error: "Пользователь не найден." });
+    return res.status(404).json({
+      error: "Пользователь не найден."
+    });
   }
 
   if (target.role === "OWNER" || target.id === req.user.id) {
@@ -554,6 +731,7 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
         error: "Можно назначить только FREE или PRO."
       });
     }
+
     updates.role = req.body.role;
   }
 
@@ -563,22 +741,26 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
         error: "Некорректное значение блокировки."
       });
     }
+
     updates.is_blocked = req.body.is_blocked ? 1 : 0;
   }
 
   if (!Object.keys(updates).length) {
-    return res.status(400).json({ error: "Нет изменений." });
+    return res.status(400).json({
+      error: "Нет изменений."
+    });
   }
 
-  const set = Object.keys(updates)
-    .map(key => `${key} = @${key}`)
-    .join(", ");
+  const keys = Object.keys(updates);
+
+  const set = keys.map(key => `${key} = @${key}`).join(", ");
 
   db.prepare(`UPDATE users SET ${set} WHERE id = ?`)
-    .run(...Object.values(updates), id);
+    .run({ ...updates, id });
 
   if (updates.is_blocked === 1) {
-    db.prepare("DELETE FROM sessions WHERE user_id = ?").run(id);
+    db.prepare("DELETE FROM sessions WHERE user_id = ?")
+      .run(id);
   }
 
   const updated = db.prepare(`
@@ -586,10 +768,15 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
     FROM users WHERE id = ?
   `).get(id);
 
-  res.json({ success: true, user: updated });
+  res.json({
+    success: true,
+    user: updated
+  });
 });
 
-// ИСПОЛЬЗОВАНИЕ
+// ==========================================
+// ЛИМИТЫ И ИСПОЛЬЗОВАНИЕ
+// ==========================================
 
 function getUsage(userId) {
   return db.prepare(`
@@ -603,28 +790,59 @@ function getUsage(userId) {
   };
 }
 
-const reserveMessage = db.transaction(userId => {
+function reserveCounter(userId, counter, amount, limit) {
+  if (limit === Infinity) return true;
+
   const date = usageDate();
   const current = getUsage(userId);
 
-  if (current.messages >= LIMITS.FREE.messages) return false;
+  if (current[counter] + amount > limit) {
+    return false;
+  }
+
+  const allowedColumns = ["messages", "images", "files"];
+
+  if (!allowedColumns.includes(counter)) {
+    return false;
+  }
 
   db.prepare(`
-    INSERT INTO daily_usage (user_id, usage_date, messages, images, files)
-    VALUES (?, ?, 1, 0, 0)
-    ON CONFLICT(user_id, usage_date)
-    DO UPDATE SET messages = messages + 1
+    INSERT INTO daily_usage
+      (user_id, usage_date, messages, images, files)
+    VALUES (?, ?, 0, 0, 0)
+    ON CONFLICT(user_id, usage_date) DO NOTHING
   `).run(userId, date);
 
+  db.prepare(`
+    UPDATE daily_usage
+    SET ${counter} = ${counter} + ?
+    WHERE user_id = ? AND usage_date = ?
+  `).run(amount, userId, date);
+
   return true;
+}
+
+function releaseCounter(userId, counter, amount = 1) {
+  if (!["messages", "images", "files"].includes(counter)) return;
+
+  db.prepare(`
+    UPDATE daily_usage
+    SET ${counter} = MAX(0, ${counter} - ?)
+    WHERE user_id = ? AND usage_date = ?
+  `).run(amount, userId, usageDate());
+}
+
+const reserveMessage = db.transaction(userId => {
+  return reserveCounter(
+    userId,
+    "messages",
+    1,
+    LIMITS.FREE.messages
+  );
 });
 
 function releaseMessage(userId) {
-  db.prepare(`
-    UPDATE daily_usage
-    SET messages = CASE WHEN messages > 0 THEN messages - 1 ELSE 0 END
-    WHERE user_id = ? AND usage_date = ?
-  `).run(userId, usageDate());
+  releaseCounter(userId, "messages", 1);
 }
 
 function limitsFor(user) {
@@ -639,18 +857,25 @@ function serializableLimits(limits) {
   };
 }
 
+// ==========================================
 // СТАТУС
+// ==========================================
 
 app.get("/api/status", (req, res) => {
   res.json({
     name: "Pinsk AI",
     server: "online",
     model: MODEL,
-    apiKeyConfigured: Boolean(process.env.OPENAI_API_KEY)
+    imageModel: IMAGE_MODEL,
+    apiKeyConfigured: Boolean(API_KEY),
+    uploadsEnabled: true,
+    imageGenerationEnabled: Boolean(API_KEY)
   });
 });
 
+// ==========================================
 // ТАРИФЫ
+// ==========================================
 
 app.get("/api/plans", (req, res) => {
   res.json({
@@ -681,16 +906,12 @@ app.get("/api/plans", (req, res) => {
   });
 });
 
-// ЛИМИТЫ
-
 app.get("/api/limits", auth, (req, res) => {
   res.json({
     plan: req.user.role,
     limits: serializableLimits(limitsFor(req.user))
   });
 });
-
-// ИСПОЛЬЗОВАНИЕ
 
 app.get("/api/usage", auth, (req, res) => {
   const used = getUsage(req.user.id);
@@ -705,9 +926,11 @@ app.get("/api/usage", auth, (req, res) => {
       messages: limits.messages === Infinity
         ? "unlimited"
         : Math.max(0, limits.messages - used.messages),
+
       images: limits.images === Infinity
         ? "unlimited"
         : Math.max(0, limits.images - used.images),
+
       files: limits.files === Infinity
         ? "unlimited"
         : Math.max(0, limits.files - used.files)
@@ -715,8 +938,9 @@ app.get("/api/usage", auth, (req, res) => {
   });
 });
 
-// ПЛАГИНЫ: КАТАЛОГ.
-// Реальные внешние интеграции требуют отдельных подключений и ключей.
+// ==========================================
+// ПЛАГИНЫ
+// ==========================================
 
 app.get("/api/plugins", auth, (req, res) => {
   res.json({
@@ -743,7 +967,9 @@ app.get("/api/plugins", auth, (req, res) => {
   });
 });
 
+// ==========================================
 // ИСТОРИЯ ЧАТОВ
+// ==========================================
 
 app.get("/api/history", auth, (req, res) => {
   res.json(db.prepare(`
@@ -761,7 +987,9 @@ app.get("/api/history/:id", auth, (req, res) => {
   `).get(req.params.id, req.user.id);
 
   if (!conversation) {
-    return res.status(404).json({ error: "Чат не найден." });
+    return res.status(404).json({
+      error: "Чат не найден."
+    });
   }
 
   res.json(db.prepare(`
@@ -772,13 +1000,17 @@ app.get("/api/history/:id", auth, (req, res) => {
   `).all(req.params.id));
 });
 
+// ==========================================
 // ПАМЯТЬ
+// ==========================================
 
 app.post("/api/memory", auth, (req, res) => {
   const content = String(req.body.content || "").trim();
 
   if (!content) {
-    return res.status(400).json({ error: "Пустая память." });
+    return res.status(400).json({
+      error: "Пустая память."
+    });
   }
 
   const result = db.prepare(`
@@ -786,7 +1018,10 @@ app.post("/api/memory", auth, (req, res) => {
     VALUES (?, ?)
   `).run(req.user.id, content);
 
-  res.json({ success: true, id: result.lastInsertRowid });
+  res.json({
+    success: true,
+    id: result.lastInsertRowid
+  });
 });
 
 app.get("/api/memory", auth, (req, res) => {
@@ -807,10 +1042,12 @@ app.delete("/api/memory/:id", auth, (req, res) => {
   res.json({ success: true });
 });
 
+// ==========================================
 // ПОДКЛЮЧЕНИЕ ИИ
+// ==========================================
 
 const ai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: API_KEY || "missing-api-key",
   ...(process.env.OPENAI_BASE_URL
     ? { baseURL: process.env.OPENAI_BASE_URL }
     : {})
@@ -826,149 +1063,449 @@ async function askAI(messages) {
     "Не удалось получить ответ.";
 }
 
-// ЧАТ
+// ==========================================
+// ЧАТ С ФАЙЛАМИ И ИЗОБРАЖЕНИЯМИ
+// ==========================================
 
-app.post("/api/chat", auth, async (req, res) => {
-  const userId = req.user.id;
+app.post(
+  "/api/chat",
+  auth,
+  upload.array("files", MAX_FILES),
+  async (req, res) => {
+    const userId = req.user.id;
+
+    let messageReserved = false;
+    let filesReserved = false;
+
+    const files = req.files || [];
+
+    try {
+      if (!API_KEY) {
+        return res.status(503).json({
+          error: "Не настроен API-ключ Pinsk."
+        });
+      }
+
+      const message = String(req.body.message || "").trim();
+
+      const conversationId = String(
+        req.body.conversationId || crypto.randomUUID()
+      );
+
+      if (!message && files.length === 0) {
+        return res.status(400).json({
+          error: "Напиши сообщение или прикрепи файл."
+        });
+      }
+
+      if (message.length > 12000) {
+        return res.status(400).json({
+          error: "Сообщение слишком длинное."
+        });
+      }
+
+      const totalSize = files.reduce(
+        (sum, file) => sum + file.size,
+        0
+      );
+
+      if (totalSize > 30 * 1024 * 1024) {
+        return res.status(413).json({
+          error: "Общий размер файлов слишком большой."
+        });
+      }
+
+      const limits = limitsFor(req.user);
+
+      if (limits.messages !== Infinity) {
+        messageReserved = reserveMessage(userId);
+
+        if (!messageReserved) {
+          return res.status(429).json({
+            error: "Дневной лимит сообщений исчерпан.",
+            code: "DAILY_LIMIT_REACHED",
+            plan: req.user.role,
+            used: getUsage(userId).messages,
+            limit: limits.messages
+          });
+        }
+      }
+
+      if (files.length > 0 && limits.files !== Infinity) {
+        filesReserved = reserveCounter(
+          userId,
+          "files",
+          files.length,
+          limits.files
+        );
+
+        if (!filesReserved) {
+          if (messageReserved) releaseMessage(userId);
+
+          return res.status(429).json({
+            error: "Дневной лимит файлов исчерпан.",
+            code: "FILE_LIMIT_REACHED",
+            used: getUsage(userId).files,
+            limit: limits.files
+          });
+        }
+      }
+
+      const conversation = db.prepare(`
+        SELECT id, user_id
+        FROM conversations
+        WHERE id = ?
+      `).get(conversationId);
+
+      if (conversation && conversation.user_id !== userId) {
+        if (conversation.user_id === null) {
+          db.prepare(`
+            UPDATE conversations
+            SET user_id = ?
+            WHERE id = ?
+          `).run(userId, conversationId);
+        } else {
+          if (messageReserved) releaseMessage(userId);
+          if (filesReserved) releaseCounter(userId, "files", files.length);
+
+          return res.status(403).json({
+            error: "Нет доступа к этому чату."
+          });
+        }
+      }
+
+      if (!conversation) {
+        db.prepare(`
+          INSERT INTO conversations (id, title, user_id)
+          VALUES (?, ?, ?)
+        `).run(
+          conversationId,
+          (message || "Прикреплённые файлы").slice(0, 60),
+          userId
+        );
+      }
+
+      const fileParts = [];
+      const imageParts = [];
+      const fileDescriptions = [];
+
+      for (const file of files) {
+        const filename = safeFileName(file.originalname);
+
+        fileDescriptions.push({
+          name: filename,
+          size: file.size,
+          type: file.mimetype
+        });
+
+        if (isImage(file)) {
+          const mime = fileMime(file);
+
+          imageParts.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${mime};base64,${file.buffer.toString("base64")}`
+            }
+          });
+
+          fileParts.push(
+            `[Изображение прикреплено: ${filename}]`
+          );
+
+        } else {
+          const extracted = await extractFileText(file);
+
+          fileParts.push(
+            `\n\n===== ФАЙЛ: ${filename} =====\n` +
+            (extracted || "Не удалось извлечь текст.") +
+            "\n===== КОНЕЦ ФАЙЛА =====\n"
+          );
+        }
+      }
+
+      const attachmentText = fileParts.join("\n");
+
+      const userContent = (
+        message || "Проанализируй прикреплённые файлы."
+      ) + attachmentText;
+
+      db.prepare(`
+        INSERT INTO messages (conversation_id, role, content)
+        VALUES (?, 'user', ?)
+      `).run(conversationId, userContent);
+
+      const recentMessages = db.prepare(`
+        SELECT role, content
+        FROM messages
+        WHERE conversation_id = ?
+        ORDER BY id DESC
+        LIMIT 15
+      `).all(conversationId).reverse();
+
+      const savedMemories = db.prepare(`
+        SELECT content
+        FROM memories
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 30
+      `).all(userId);
+
+      const context = savedMemories
+        .map(item => item.content)
+        .join("\n");
+
+      const history = recentMessages.map(item => ({
+        role: item.role,
+        content: item.content
+      }));
+
+      if (imageParts.length > 0) {
+        const last = history[history.length - 1];
+
+        last.content = [
+          {
+            type: "text",
+            text: last.content
+          },
+          ...imageParts
+        ];
+      }
+
+      const answer = await askAI([
+        {
+          role: "system",
+          content:
+            "Ты Pinsk — интеллектуальный ИИ-ассистент. " +
+            "Отвечай полезно, точно и на языке пользователя. " +
+            "Анализируй прикреплённые файлы и изображения, если они есть. " +
+            "Не утверждай, что файл не прикреплён, если его содержимое передано в сообщении. " +
+            "Не выдумывай факты. " +
+            "Учитывай сохранённую память, если она относится к вопросу.\n\n" +
+            "ПАМЯТЬ:\n" + context.slice(0, 10000)
+        },
+        ...history
+      ]);
+
+      db.prepare(`
+        INSERT INTO messages (conversation_id, role, content)
+        VALUES (?, 'assistant', ?)
+      `).run(conversationId, answer);
+
+      const usage = getUsage(userId);
+
+      res.json({
+        answer,
+        conversationId,
+        model: MODEL,
+        files: fileDescriptions,
+        usage: {
+          plan: req.user.role,
+          messagesUsed: usage.messages,
+          messagesLimit: limits.messages === Infinity
+            ? "unlimited"
+            : limits.messages,
+          messagesRemaining: limits.messages === Infinity
+            ? "unlimited"
+            : Math.max(0, limits.messages - usage.messages)
+        }
+      });
+
+    } catch (error) {
+      console.error("Pinsk AI chat error:", error);
+
+      if (messageReserved) {
+        releaseMessage(userId);
+      }
+
+      if (filesReserved) {
+        releaseCounter(userId, "files", files.length);
+      }
+
+      const status = error instanceof multer.MulterError ? 400 : 500;
+
+      res.status(status).json({
+        error: error instanceof multer.MulterError
+          ? "Ошибка загрузки файла: " + error.message
+          : "Ошибка ИИ-сервера. Проверь настройки модели и API."
+      });
+    }
+  }
+);
+
+// ==========================================
+// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ GEMINI
+// ==========================================
+
+async function generateGeminiImage(prompt) {
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${encodeURIComponent(IMAGE_MODEL)}:generateContent`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": API_KEY
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: prompt
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"]
+      }
+    }),
+    signal: AbortSignal.timeout(180000)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("Gemini image API error:", data);
+
+    const message =
+      data?.error?.message ||
+      "Ошибка генерации изображения.";
+
+    throw new Error(message);
+  }
+
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+
+  const image = parts.find(part =>
+    part.inlineData?.data || part.inline_data?.data
+  );
+
+  if (!image) {
+    const textResponse = parts
+      .map(part => part.text || "")
+      .filter(Boolean)
+      .join("\n");
+
+    throw new Error(
+      textResponse || "Модель не вернула изображение."
+    );
+  }
+
+  const imageData = image.inlineData || image.inline_data;
+
+  return {
+    mimeType: imageData.mimeType || imageData.mime_type || "image/png",
+    data: imageData.data,
+    text: parts
+      .map(part => part.text || "")
+      .filter(Boolean)
+      .join("\n")
+  };
+}
+
+async function imageGenerationHandler(req, res) {
   let reserved = false;
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    if (!API_KEY) {
       return res.status(503).json({
-        error: "Не настроен API-ключ Pinsk."
+        error: "Не настроен API-ключ Gemini."
       });
     }
 
-    const message = String(req.body.message || "").trim();
-    const conversationId = String(
-      req.body.conversationId || crypto.randomUUID()
-    );
+    const prompt = String(
+      req.body.prompt || req.body.message || ""
+    ).trim();
 
-    if (!message) {
-      return res.status(400).json({ error: "Сообщение пустое." });
+    if (!prompt) {
+      return res.status(400).json({
+        error: "Опиши изображение, которое нужно создать."
+      });
     }
 
-    if (message.length > 12000) {
-      return res.status(400).json({ error: "Сообщение слишком длинное." });
+    if (prompt.length > 5000) {
+      return res.status(400).json({
+        error: "Описание слишком длинное."
+      });
     }
 
     const limits = limitsFor(req.user);
 
-    if (limits.messages !== Infinity) {
-      reserved = reserveMessage(userId);
+    if (limits.images !== Infinity) {
+      reserved = reserveCounter(
+        req.user.id,
+        "images",
+        1,
+        limits.images
+      );
 
       if (!reserved) {
         return res.status(429).json({
-          error: "Дневной лимит сообщений исчерпан.",
-          code: "DAILY_LIMIT_REACHED",
-          plan: req.user.role,
-          used: getUsage(userId).messages,
-          limit: limits.messages
+          error: "Дневной лимит генерации изображений исчерпан.",
+          code: "IMAGE_LIMIT_REACHED",
+          used: getUsage(req.user.id).images,
+          limit: limits.images
         });
       }
     }
 
-    const conversation = db.prepare(`
-      SELECT id, user_id FROM conversations WHERE id = ?
-    `).get(conversationId);
-
-    if (conversation && conversation.user_id !== userId) {
-      if (conversation.user_id === null) {
-        db.prepare(`
-          UPDATE conversations SET user_id = ? WHERE id = ?
-        `).run(userId, conversationId);
-      } else {
-        if (reserved) releaseMessage(userId);
-        return res.status(403).json({ error: "Нет доступа к этому чату." });
-      }
-    }
-
-    if (!conversation) {
-      db.prepare(`
-        INSERT INTO conversations (id, title, user_id)
-        VALUES (?, ?, ?)
-      `).run(conversationId, message.slice(0, 60), userId);
-    }
-
-    db.prepare(`
-      INSERT INTO messages (conversation_id, role, content)
-      VALUES (?, 'user', ?)
-    `).run(conversationId, message);
-
-    const recentMessages = db.prepare(`
-      SELECT role, content
-      FROM messages
-      WHERE conversation_id = ?
-      ORDER BY id DESC
-      LIMIT 15
-    `).all(conversationId).reverse();
-
-    const savedMemories = db.prepare(`
-      SELECT content FROM memories
-      WHERE user_id = ?
-      ORDER BY id DESC LIMIT 30
-    `).all(userId);
-
-    const context = savedMemories.map(item => item.content).join("\n");
-
-    const answer = await askAI([
-      {
-        role: "system",
-        content:
-          "Ты Pinsk — ИИ-ассистент. Отвечай полезно, точно и на языке пользователя. " +
-          "Не выдумывай факты. Учитывай сохранённую память, если она относится к вопросу.\n\n" +
-          "ПАМЯТЬ:\n" + context.slice(0, 10000)
-      },
-      ...recentMessages
-    ]);
-
-    db.prepare(`
-      INSERT INTO messages (conversation_id, role, content)
-      VALUES (?, 'assistant', ?)
-    `).run(conversationId, answer);
-
-    const usage = getUsage(userId);
+    const result = await generateGeminiImage(prompt);
 
     res.json({
-      answer,
-      conversationId,
-      model: MODEL,
-      usage: {
-        plan: req.user.role,
-        messagesUsed: usage.messages,
-        messagesLimit: limits.messages === Infinity
-          ? "unlimited"
-          : limits.messages,
-        messagesRemaining: limits.messages === Infinity
-          ? "unlimited"
-          : Math.max(0, limits.messages - usage.messages)
-      }
+      success: true,
+      model: IMAGE_MODEL,
+      image: `data:${result.mimeType};base64,${result.data}`,
+      mimeType: result.mimeType,
+      text: result.text,
+      usage: getUsage(req.user.id)
     });
 
   } catch (error) {
-    console.error("Pinsk AI error:", error);
+    console.error("Image generation error:", error);
 
-    if (reserved) releaseMessage(userId);
+    if (reserved) {
+      releaseCounter(req.user.id, "images", 1);
+    }
 
     res.status(500).json({
-      error: "Ошибка ИИ-сервера. Проверь настройки модели и API."
+      error: error.message || "Не удалось создать изображение."
     });
   }
-});
+}
 
+app.post(
+  "/api/images/generate",
+  auth,
+  imageGenerationHandler
+);
+
+// Альтернативный адрес для совместимости с интерфейсом.
+app.post(
+  "/api/image/generate",
+  auth,
+  imageGenerationHandler
+);
+
+// ==========================================
 // АНАЛИЗ ДАННЫХ
+// ==========================================
 
 app.post("/api/analysis", auth, async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    if (!API_KEY) {
       return res.status(503).json({
         error: "ИИ-модель не настроена на сервере."
       });
     }
 
     const content = String(req.body.content || "").trim();
+
     const question = String(
-      req.body.question || "Проанализируй эти данные и сделай выводы."
+      req.body.question ||
+      "Проанализируй эти данные и сделай выводы."
     ).trim();
 
     if (!content) {
@@ -987,9 +1524,10 @@ app.post("/api/analysis", auth, async (req, res) => {
       {
         role: "system",
         content:
-          "Ты аналитик данных Pinsk. Анализируй предоставленные таблицы и текст. " +
-          "Находи закономерности, ошибки, тенденции, сравнения и делай выводы. " +
-          "Не выдумывай отсутствующие значения. Если данных недостаточно, сообщи об этом."
+          "Ты аналитик данных Pinsk. " +
+          "Анализируй таблицы и текст. " +
+          "Находи закономерности, ошибки, тенденции, сравнения " +
+          "и делай выводы. Не выдумывай отсутствующие значения."
       },
       {
         role: "user",
@@ -997,17 +1535,23 @@ app.post("/api/analysis", auth, async (req, res) => {
       }
     ]);
 
-    res.json({ success: true, answer });
+    res.json({
+      success: true,
+      answer
+    });
 
   } catch (error) {
     console.error("Data analysis error:", error);
+
     res.status(500).json({
       error: "Не удалось выполнить анализ данных."
     });
   }
 });
 
+// ==========================================
 // САЙТ
+// ==========================================
 
 app.use(express.static(__dirname, {
   index: "index.html"
@@ -1017,19 +1561,35 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
+// ==========================================
 // ОБРАБОТКА ОШИБОК
+// ==========================================
 
 app.use((error, req, res, next) => {
   console.error("Express error:", error);
 
   if (res.headersSent) return next(error);
 
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({
+      error: "Ошибка загрузки файла: " + error.message
+    });
+  }
+
+  if (error.message && error.message.startsWith("Формат файла")) {
+    return res.status(400).json({
+      error: error.message
+    });
+  }
+
   res.status(500).json({
     error: "Внутренняя ошибка сервера."
   });
 });
 
+// ==========================================
 // ЗАПУСК
+// ==========================================
 
 app.listen(PORT, () => {
   console.log("================================");
@@ -1037,11 +1597,15 @@ app.listen(PORT, () => {
   console.log("================================");
   console.log("Порт:", PORT);
   console.log("База данных:", DB_PATH);
-  console.log("Модель:", MODEL);
+  console.log("Модель чата:", MODEL);
+  console.log("Модель изображений:", IMAGE_MODEL);
   console.log("OWNER:", OWNER_EMAIL);
   console.log("FREE: 100 сообщений в день");
+  console.log("FREE: 5 изображений и 5 файлов в день");
   console.log("PRO: безлимит");
   console.log("OWNER: безлимит");
+  console.log("Загрузка файлов: включена");
+  console.log("Генерация изображений: включена");
   console.log("Анализ данных API: включён");
   console.log("Админ API: включён");
   console.log("================================");
