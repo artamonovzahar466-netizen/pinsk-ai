@@ -17,7 +17,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
-const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
+const OWNER_EMAIL = "artamonovzahar466@gmail.com";
 const SESSION_DURATION = 30 * 24 * 60 * 60 * 1000;
 
 app.set("trust proxy", 1);
@@ -55,6 +55,7 @@ const db = new Database(DB_PATH);
 
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -109,7 +110,7 @@ function hasColumn(table, column) {
     .some(item => item.name === column);
 }
 
-// Безопасное обновление существующей базы.
+// Миграция существующей базы.
 if (!hasColumn("conversations", "user_id")) {
   db.exec("ALTER TABLE conversations ADD COLUMN user_id TEXT");
 }
@@ -125,14 +126,13 @@ if (!hasColumn("users", "is_blocked")) {
   `);
 }
 
-// Назначение владельца по email.
+// Назначение владельца.
 db.prepare(`
   UPDATE users
   SET role = 'OWNER'
   WHERE lower(email) = ?
 `).run(OWNER_EMAIL);
 
-// Индексы для ускорения запросов.
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sessions_user
   ON sessions(user_id);
@@ -321,6 +321,26 @@ function sendError(res, status, message, code) {
   return res.status(status).json(result);
 }
 
+function limitsFor(user) {
+  return LIMITS[user.role] || LIMITS.FREE;
+}
+
+function serializableLimits(limits) {
+  return {
+    messages: limits.messages === Infinity
+      ? "unlimited"
+      : limits.messages,
+
+    images: limits.images === Infinity
+      ? "unlimited"
+      : limits.images,
+
+    files: limits.files === Infinity
+      ? "unlimited"
+      : limits.files
+  };
+}
+
 // ============================================
 // AUTHORIZATION
 // ============================================
@@ -342,11 +362,7 @@ function auth(req, res, next) {
     const token = cookieToken(req);
 
     if (!token) {
-      return sendError(
-        res,
-        401,
-        "Войди в аккаунт Pinsk."
-      );
+      return sendError(res, 401, "Войди в аккаунт Pinsk.");
     }
 
     const tokenHash = hashToken(token);
@@ -382,12 +398,7 @@ function auth(req, res, next) {
 
     if (!user) {
       clearSessionCookie(res, req);
-
-      return sendError(
-        res,
-        401,
-        "Аккаунт не найден."
-      );
+      return sendError(res, 401, "Аккаунт не найден.");
     }
 
     if (user.is_blocked) {
@@ -398,11 +409,7 @@ function auth(req, res, next) {
 
       clearSessionCookie(res, req);
 
-      return sendError(
-        res,
-        403,
-        "Аккаунт заблокирован."
-      );
+      return sendError(res, 403, "Аккаунт заблокирован.");
     }
 
     if (
@@ -429,17 +436,11 @@ function auth(req, res, next) {
     setSessionCookie(res, token, req);
 
     req.user = user;
-
     next();
 
   } catch (error) {
     console.error("Auth error:", error);
-
-    return sendError(
-      res,
-      500,
-      "Ошибка проверки авторизации."
-    );
+    return sendError(res, 500, "Ошибка проверки авторизации.");
   }
 }
 
@@ -453,26 +454,6 @@ function requireOwner(req, res, next) {
   }
 
   next();
-}
-
-function limitsFor(user) {
-  return LIMITS[user.role] || LIMITS.FREE;
-}
-
-function serializableLimits(limits) {
-  return {
-    messages: limits.messages === Infinity
-      ? "unlimited"
-      : limits.messages,
-
-    images: limits.images === Infinity
-      ? "unlimited"
-      : limits.images,
-
-    files: limits.files === Infinity
-      ? "unlimited"
-      : limits.files
-  };
 }
 
 // ============================================
@@ -497,11 +478,7 @@ app.post("/api/auth/register", (req, res) => {
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return sendError(
-        res,
-        400,
-        "Введи правильный email."
-      );
+      return sendError(res, 400, "Введи правильный email.");
     }
 
     if (password.length < 8 || password.length > 128) {
@@ -513,9 +490,7 @@ app.post("/api/auth/register", (req, res) => {
     }
 
     const existing = db.prepare(`
-      SELECT id
-      FROM users
-      WHERE email = ?
+      SELECT id FROM users WHERE email = ?
     `).get(email);
 
     if (existing) {
@@ -531,11 +506,7 @@ app.post("/api/auth/register", (req, res) => {
 
     db.prepare(`
       INSERT INTO users (
-        id,
-        name,
-        email,
-        password_hash,
-        role
+        id, name, email, password_hash, role
       )
       VALUES (?, ?, ?, ?, ?)
     `).run(
@@ -572,11 +543,7 @@ app.post("/api/auth/register", (req, res) => {
       );
     }
 
-    return sendError(
-      res,
-      500,
-      "Не удалось создать аккаунт."
-    );
+    return sendError(res, 500, "Не удалось создать аккаунт.");
   }
 });
 
@@ -593,17 +560,11 @@ app.post("/api/auth/login", (req, res) => {
     const password = String(req.body.password || "");
 
     const user = db.prepare(`
-      SELECT *
-      FROM users
-      WHERE email = ?
+      SELECT * FROM users WHERE email = ?
     `).get(email);
 
     if (!user || !verifyPassword(password, user.password_hash)) {
-      return sendError(
-        res,
-        401,
-        "Неверный email или пароль."
-      );
+      return sendError(res, 401, "Неверный email или пароль.");
     }
 
     if (user.is_blocked) {
@@ -616,9 +577,7 @@ app.post("/api/auth/login", (req, res) => {
 
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
       db.prepare(`
-        UPDATE users
-        SET role = 'OWNER'
-        WHERE id = ?
+        UPDATE users SET role = 'OWNER' WHERE id = ?
       `).run(user.id);
 
       user.role = "OWNER";
@@ -635,12 +594,7 @@ app.post("/api/auth/login", (req, res) => {
 
   } catch (error) {
     console.error("Login error:", error);
-
-    return sendError(
-      res,
-      500,
-      "Ошибка входа."
-    );
+    return sendError(res, 500, "Ошибка входа.");
   }
 });
 
@@ -658,11 +612,7 @@ app.get("/api/auth/me", auth, (req, res) => {
   `).get(req.user.id);
 
   if (!user) {
-    return sendError(
-      res,
-      401,
-      "Аккаунт не найден."
-    );
+    return sendError(res, 401, "Аккаунт не найден.");
   }
 
   res.json({
@@ -686,17 +636,11 @@ app.post("/api/auth/logout", (req, res) => {
     }
 
     clearSessionCookie(res, req);
-
     res.json({ success: true });
 
   } catch (error) {
     console.error("Logout error:", error);
-
-    return sendError(
-      res,
-      500,
-      "Не удалось завершить сессию."
-    );
+    return sendError(res, 500, "Не удалось завершить сессию.");
   }
 });
 
@@ -732,10 +676,7 @@ app.get("/api/admin/users", auth, requireOwner, (req, res) => {
     WHERE name LIKE ? OR email LIKE ?
     ORDER BY created_at DESC
     LIMIT 200
-  `).all(
-    `%${search}%`,
-    `%${search}%`
-  );
+  `).all(`%${search}%`, `%${search}%`);
 
   res.json(users);
 });
@@ -744,17 +685,11 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   const id = String(req.params.id);
 
   const target = db.prepare(`
-    SELECT *
-    FROM users
-    WHERE id = ?
+    SELECT * FROM users WHERE id = ?
   `).get(id);
 
   if (!target) {
-    return sendError(
-      res,
-      404,
-      "Пользователь не найден."
-    );
+    return sendError(res, 404, "Пользователь не найден.");
   }
 
   if (target.role === "OWNER" || target.id === req.user.id) {
@@ -792,11 +727,7 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   }
 
   if (!Object.keys(updates).length) {
-    return sendError(
-      res,
-      400,
-      "Нет изменений."
-    );
+    return sendError(res, 400, "Нет изменений.");
   }
 
   const columns = Object.keys(updates)
@@ -814,8 +745,7 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
 
   if (updates.is_blocked === 1) {
     db.prepare(`
-      DELETE FROM sessions
-      WHERE user_id = ?
+      DELETE FROM sessions WHERE user_id = ?
     `).run(id);
   }
 
@@ -857,11 +787,7 @@ const reserveMessage = db.transaction(userId => {
 
   db.prepare(`
     INSERT INTO daily_usage (
-      user_id,
-      usage_date,
-      messages,
-      images,
-      files
+      user_id, usage_date, messages, images, files
     )
     VALUES (?, ?, 1, 0, 0)
     ON CONFLICT(user_id, usage_date)
@@ -1016,11 +942,7 @@ app.get("/api/history/:id", auth, (req, res) => {
   `).get(req.params.id, req.user.id);
 
   if (!conversation) {
-    return sendError(
-      res,
-      404,
-      "Чат не найден."
-    );
+    return sendError(res, 404, "Чат не найден.");
   }
 
   const messages = db.prepare(`
@@ -1033,7 +955,6 @@ app.get("/api/history/:id", auth, (req, res) => {
   res.json(messages);
 });
 
-// Удаление чата.
 app.delete("/api/history/:id", auth, (req, res) => {
   const id = String(req.params.id);
 
@@ -1044,11 +965,7 @@ app.delete("/api/history/:id", auth, (req, res) => {
   `).get(id, req.user.id);
 
   if (!conversation) {
-    return sendError(
-      res,
-      404,
-      "Чат не найден."
-    );
+    return sendError(res, 404, "Чат не найден.");
   }
 
   const deleteConversation = db.transaction(() => {
@@ -1076,19 +993,11 @@ app.post("/api/memory", auth, (req, res) => {
   const content = String(req.body.content || "").trim();
 
   if (!content) {
-    return sendError(
-      res,
-      400,
-      "Пустая память."
-    );
+    return sendError(res, 400, "Пустая память.");
   }
 
   if (content.length > 10000) {
-    return sendError(
-      res,
-      400,
-      "Запись памяти слишком большая."
-    );
+    return sendError(res, 400, "Запись памяти слишком большая.");
   }
 
   const result = db.prepare(`
@@ -1139,10 +1048,7 @@ const storage = multer.diskStorage({
     const safeName = path.basename(file.originalname)
       .replace(/[^a-zA-Z0-9._-]/g, "_");
 
-    cb(
-      null,
-      crypto.randomUUID() + "-" + safeName
-    );
+    cb(null, crypto.randomUUID() + "-" + safeName);
   }
 });
 
@@ -1163,11 +1069,7 @@ app.post(
     const files = req.files || [];
 
     if (!files.length) {
-      return sendError(
-        res,
-        400,
-        "Файлы не выбраны."
-      );
+      return sendError(res, 400, "Файлы не выбраны.");
     }
 
     const limits = limitsFor(req.user);
@@ -1191,9 +1093,7 @@ app.post(
 
     db.prepare(`
       INSERT INTO daily_usage (
-        user_id,
-        usage_date,
-        files
+        user_id, usage_date, files
       )
       VALUES (?, ?, ?)
       ON CONFLICT(user_id, usage_date)
@@ -1217,18 +1117,39 @@ app.post(
 );
 
 // ============================================
-// AI
+// AI CLIENT
 // ============================================
 
-const ai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+// Клиент создаётся только при реальном запросе к ИИ.
+// Это позволяет серверу запускаться без API-ключа.
 
-  ...(process.env.OPENAI_BASE_URL
-    ? { baseURL: process.env.OPENAI_BASE_URL }
-    : {})
-});
+let aiClient = null;
+
+function getAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY не настроен.");
+  }
+
+  if (!aiClient) {
+    const options = {
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 120000,
+      maxRetries: 2
+    };
+
+    if (process.env.OPENAI_BASE_URL) {
+      options.baseURL = process.env.OPENAI_BASE_URL;
+    }
+
+    aiClient = new OpenAI(options);
+  }
+
+  return aiClient;
+}
 
 async function askAI(messages) {
+  const ai = getAIClient();
+
   const response = await ai.chat.completions.create({
     model: MODEL,
     messages
@@ -1236,7 +1157,7 @@ async function askAI(messages) {
 
   const answer = response.choices?.[0]?.message?.content;
 
-  if (!answer) {
+  if (!answer || typeof answer !== "string") {
     throw new Error("Модель вернула пустой ответ.");
   }
 
@@ -1250,7 +1171,6 @@ async function askAI(messages) {
 app.post("/api/chat", auth, async (req, res) => {
   const userId = req.user.id;
   let reserved = false;
-  let userMessageSaved = false;
 
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -1265,7 +1185,6 @@ app.post("/api/chat", auth, async (req, res) => {
       req.body.message || req.body.content || ""
     ).trim();
 
-    // Поддержка обоих вариантов названия параметра.
     const conversationId = String(
       req.body.conversationId ||
       req.body.conversation_id ||
@@ -1273,19 +1192,15 @@ app.post("/api/chat", auth, async (req, res) => {
     );
 
     if (!message) {
-      return sendError(
-        res,
-        400,
-        "Сообщение пустое."
-      );
+      return sendError(res, 400, "Сообщение пустое.");
     }
 
     if (message.length > 12000) {
-      return sendError(
-        res,
-        400,
-        "Сообщение слишком длинное."
-      );
+      return sendError(res, 400, "Сообщение слишком длинное.");
+    }
+
+    if (conversationId.length > 100) {
+      return sendError(res, 400, "Некорректный идентификатор чата.");
     }
 
     const limits = limitsFor(req.user);
@@ -1310,15 +1225,22 @@ app.post("/api/chat", auth, async (req, res) => {
     `).get(conversationId);
 
     if (conversation && conversation.user_id !== userId) {
+      // Разрешаем привязать старый чат без владельца.
       if (conversation.user_id === null) {
         db.prepare(`
           UPDATE conversations
           SET user_id = ?
-          WHERE id = ?
+          WHERE id = ? AND user_id IS NULL
         `).run(userId, conversationId);
 
-        conversation.user_id = userId;
-      } else {
+        conversation = db.prepare(`
+          SELECT id, user_id
+          FROM conversations
+          WHERE id = ?
+        `).get(conversationId);
+      }
+
+      if (!conversation || conversation.user_id !== userId) {
         if (reserved) {
           releaseMessage(userId);
           reserved = false;
@@ -1345,14 +1267,10 @@ app.post("/api/chat", auth, async (req, res) => {
 
     db.prepare(`
       INSERT INTO messages (
-        conversation_id,
-        role,
-        content
+        conversation_id, role, content
       )
       VALUES (?, 'user', ?)
     `).run(conversationId, message);
-
-    userMessageSaved = true;
 
     const recentMessages = db.prepare(`
       SELECT role, content
@@ -1390,9 +1308,7 @@ app.post("/api/chat", auth, async (req, res) => {
 
     db.prepare(`
       INSERT INTO messages (
-        conversation_id,
-        role,
-        content
+        conversation_id, role, content
       )
       VALUES (?, 'assistant', ?)
     `).run(conversationId, answer);
@@ -1408,7 +1324,6 @@ app.post("/api/chat", auth, async (req, res) => {
 
       usage: {
         plan: req.user.role,
-
         messagesUsed: usage.messages,
 
         messagesLimit: limits.messages === Infinity
@@ -1425,7 +1340,11 @@ app.post("/api/chat", auth, async (req, res) => {
     console.error("Pinsk AI error:", error);
 
     if (reserved) {
-      releaseMessage(userId);
+      try {
+        releaseMessage(userId);
+      } catch (usageError) {
+        console.error("Usage rollback error:", usageError);
+      }
     }
 
     return sendError(
@@ -1463,11 +1382,7 @@ app.post("/api/analysis", auth, async (req, res) => {
     ).trim();
 
     if (!content) {
-      return sendError(
-        res,
-        400,
-        "Нет данных для анализа."
-      );
+      return sendError(res, 400, "Нет данных для анализа.");
     }
 
     if (content.length > 100000) {
@@ -1490,11 +1405,7 @@ app.post("/api/analysis", auth, async (req, res) => {
 
       {
         role: "user",
-
-        content:
-          question +
-          "\n\nДАННЫЕ:\n" +
-          content
+        content: question + "\n\nДАННЫЕ:\n" + content
       }
     ]);
 
@@ -1523,9 +1434,7 @@ app.use(express.static(__dirname, {
 }));
 
 app.get("/", (req, res) => {
-  res.sendFile(
-    path.join(__dirname, "index.html")
-  );
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 // ============================================
@@ -1540,8 +1449,25 @@ app.use((error, req, res, next) => {
   }
 
   if (error instanceof multer.MulterError) {
+    let message = "Ошибка загрузки файла.";
+
+    if (error.code === "LIMIT_FILE_SIZE") {
+      message = "Файл превышает допустимый размер 10 МБ.";
+    } else if (error.code === "LIMIT_FILE_COUNT") {
+      message = "Можно загрузить не более 5 файлов за раз.";
+    } else if (error.code === "LIMIT_UNEXPECTED_FILE") {
+      message = "Некорректное поле загрузки файла.";
+    }
+
     return res.status(400).json({
-      error: "Ошибка загрузки файла: " + error.message
+      error: message,
+      code: error.code
+    });
+  }
+
+  if (error instanceof SyntaxError && error.status === 400) {
+    return res.status(400).json({
+      error: "Некорректный JSON в запросе."
     });
   }
 
@@ -1554,13 +1480,14 @@ app.use((error, req, res, next) => {
 // START
 // ============================================
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log("================================");
   console.log("          PINSK AI");
   console.log("================================");
   console.log("Порт:", PORT);
   console.log("База данных:", DB_PATH);
   console.log("Модель:", MODEL);
+  console.log("API-ключ:", process.env.OPENAI_API_KEY ? "настроен" : "не настроен");
   console.log("OWNER:", OWNER_EMAIL);
   console.log("Авторизация: включена");
   console.log("Продление сессий: включено");
@@ -1570,3 +1497,21 @@ app.listen(PORT, () => {
   console.log("Память: включена");
   console.log("================================");
 });
+
+function shutdown(signal) {
+  console.log(`${signal}: завершение работы Pinsk AI...`);
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log("База данных закрыта.");
+      process.exit(0);
+    } catch (error) {
+      console.error("Ошибка закрытия базы:", error);
+      process.exit(1);
+    }
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
