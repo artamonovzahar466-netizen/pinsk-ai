@@ -4,7 +4,6 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const OpenAI = require("openai");
 const Database = require("better-sqlite3");
 const crypto = require("crypto");
 const path = require("path");
@@ -13,6 +12,15 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
+
+const {
+  initGeminiKeysTable,
+  getAllKeys,
+  insertKey,
+  toggleKeyActive,
+  deleteKey,
+  executeWithKeyRotation
+} = require("./key-manager");
 
 dotenv.config();
 
@@ -23,7 +31,8 @@ const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
 const IMAGE_MODEL = process.env.IMAGE_MODEL || "gemini-3.1-flash-image";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
-const API_KEY = process.env.OPENAI_API_KEY;
+// Старый ключ используется только для первоначального переноса.
+const LEGACY_API_KEY = process.env.OPENAI_API_KEY;
 
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
@@ -57,6 +66,35 @@ const db = new Database(DB_PATH);
 
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+
+// Инициализация таблицы зашифрованных Gemini-ключей.
+initGeminiKeysTable(db);
+
+// Однократный перенос старого ключа из OPENAI_API_KEY.
+// Если таблица уже содержит ключи, перенос не выполняется.
+if (LEGACY_API_KEY && getAllKeys(db).length === 0) {
+  try {
+    insertKey(db, LEGACY_API_KEY.trim());
+    console.log("Pinsk: старый API-ключ перенесён в менеджер.");
+  } catch (error) {
+    console.error("Не удалось перенести старый API-ключ:", error.message);
+  }
+}
+
+function getGeminiKeys() {
+  return getAllKeys(db);
+}
+
+function isKeyActive(key) {
+  if (key.is_active !== undefined) return Boolean(key.is_active);
+  if (key.active !== undefined) return Boolean(key.active);
+  if (key.enabled !== undefined) return Boolean(key.enabled);
+  return true;
+}
+
+function hasActiveGeminiKeys() {
+  return getGeminiKeys().some(isKeyActive);
+}
 
 const LIMITS = {
   FREE: {
@@ -134,13 +172,8 @@ const upload = multer({
 
     const allowed = [
       ".png", ".jpg", ".jpeg", ".webp", ".gif",
-      ".pdf",
-      ".docx",
-      ".xlsx", ".xls",
-      ".csv",
-      ".txt", ".md", ".json",
-      ".html", ".xml",
-      ".log"
+      ".pdf", ".docx", ".xlsx", ".xls", ".csv",
+      ".txt", ".md", ".json", ".html", ".xml", ".log"
     ];
 
     if (!allowed.includes(extension)) {
@@ -168,9 +201,7 @@ function isImage(file) {
 async function extractFileText(file) {
   const extension = path.extname(file.originalname).toLowerCase();
 
-  if (isImage(file)) {
-    return "";
-  }
+  if (isImage(file)) return "";
 
   if (extension === ".pdf") {
     const result = await pdfParse(file.buffer);
@@ -185,16 +216,12 @@ async function extractFileText(file) {
   }
 
   if (extension === ".xlsx" || extension === ".xls") {
-    const workbook = XLSX.read(file.buffer, {
-      type: "buffer"
-    });
+    const workbook = XLSX.read(file.buffer, { type: "buffer" });
 
     return workbook.SheetNames.map(sheetName => {
-      const sheet = workbook.Sheets[sheetName];
-
       return (
         "Лист: " + sheetName + "\n" +
-        XLSX.utils.sheet_to_csv(sheet)
+        XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
       );
     }).join("\n\n");
   }
@@ -340,7 +367,6 @@ function verifyPassword(password, stored) {
   if (!stored || typeof stored !== "string") return false;
 
   const [salt, hash] = stored.split(":");
-
   if (!salt || !hash) return false;
 
   const actual = Buffer.from(passwordHash(password, salt), "hex");
@@ -429,7 +455,6 @@ function auth(req, res, next) {
 
     if (!session) {
       clearSessionCookie(res, req);
-
       return res.status(401).json({
         error: "Сессия истекла. Войди в аккаунт."
       });
@@ -443,7 +468,6 @@ function auth(req, res, next) {
 
     if (!user) {
       clearSessionCookie(res, req);
-
       return res.status(401).json({
         error: "Аккаунт не найден."
       });
@@ -455,7 +479,6 @@ function auth(req, res, next) {
     ) {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
-
       user.role = "OWNER";
     }
 
@@ -474,7 +497,7 @@ function auth(req, res, next) {
     next();
 
   } catch (error) {
-    console.error("Auth error:", error);
+    console.error("Auth error:", error.message);
 
     res.status(500).json({
       error: "Ошибка проверки авторизации."
@@ -494,9 +517,7 @@ function requireOwner(req, res, next) {
 
 function issueSession(user, res, req) {
   const token = crypto.randomBytes(32).toString("hex");
-
-  const expiresAt =
-    Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
   db.prepare(`
     INSERT INTO sessions (token_hash, user_id, expires_at)
@@ -513,10 +534,7 @@ function issueSession(user, res, req) {
 app.post("/api/auth/register", (req, res) => {
   try {
     const name = String(req.body.name || "").trim();
-    const email = String(req.body.email || "")
-      .trim()
-      .toLowerCase();
-
+    const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
 
     if (name.length < 2 || name.length > 50) {
@@ -568,7 +586,7 @@ app.post("/api/auth/register", (req, res) => {
     });
 
   } catch (error) {
-    console.error("Registration error:", error);
+    console.error("Registration error:", error.message);
 
     res.status(500).json({
       error: "Не удалось создать аккаунт."
@@ -582,10 +600,7 @@ app.post("/api/auth/register", (req, res) => {
 
 app.post("/api/auth/login", (req, res) => {
   try {
-    const email = String(req.body.email || "")
-      .trim()
-      .toLowerCase();
-
+    const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
 
     const user = db.prepare(
@@ -607,12 +622,10 @@ app.post("/api/auth/login", (req, res) => {
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
-
       user.role = "OWNER";
     }
 
     issueSession(user, res, req);
-
     res.setHeader("Cache-Control", "no-store");
 
     res.json({
@@ -621,7 +634,7 @@ app.post("/api/auth/login", (req, res) => {
     });
 
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("Login error:", error.message);
 
     res.status(500).json({
       error: "Ошибка входа."
@@ -647,9 +660,7 @@ app.get("/api/auth/me", auth, (req, res) => {
     });
   }
 
-  res.json({
-    user: publicUser(user)
-  });
+  res.json({ user: publicUser(user) });
 });
 
 // ==========================================
@@ -665,7 +676,6 @@ app.post("/api/auth/logout", (req, res) => {
   }
 
   clearSessionCookie(res, req);
-
   res.json({ success: true });
 });
 
@@ -752,7 +762,6 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
   }
 
   const keys = Object.keys(updates);
-
   const set = keys.map(key => `${key} = @${key}`).join(", ");
 
   db.prepare(`UPDATE users SET ${set} WHERE id = ?`)
@@ -773,6 +782,131 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
     user: updated
   });
 });
+
+// ==========================================
+// УПРАВЛЕНИЕ GEMINI API-КЛЮЧАМИ
+// ==========================================
+
+// Получить список ключей. Сами секреты никогда не возвращаются.
+app.get("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  try {
+    const keys = getGeminiKeys().map(key => ({
+      id: key.id,
+      active: isKeyActive(key),
+      status: key.status || null,
+      created_at: key.created_at || null,
+      last_used_at: key.last_used_at || null,
+      last_error: key.last_error || null
+    }));
+
+    res.json({
+      success: true,
+      total: keys.length,
+      active: keys.filter(key => key.active).length,
+      keys
+    });
+
+  } catch (error) {
+    console.error("Gemini keys list error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить список API-ключей."
+    });
+  }
+});
+
+// Добавить новый Gemini API-ключ.
+app.post("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
+  try {
+    const apiKey = typeof req.body.apiKey === "string"
+      ? req.body.apiKey.trim()
+      : "";
+
+    if (!apiKey || apiKey.length < 10 || apiKey.length > 500) {
+      return res.status(400).json({
+        error: "Укажи корректный Gemini API-ключ."
+      });
+    }
+
+    const result = insertKey(db, apiKey);
+
+    res.status(201).json({
+      success: true,
+      message: "API-ключ добавлен.",
+      key: result
+    });
+
+  } catch (error) {
+    // Не записываем тело запроса и сам API-ключ в логи.
+    console.error("Gemini key insert error:", error.message);
+
+    res.status(400).json({
+      error: "Не удалось добавить ключ. Проверь его или попробуй другой."
+    });
+  }
+});
+
+// Включить или отключить ключ.
+app.patch(
+  "/api/admin/gemini-keys/:id/toggle",
+  auth,
+  requireOwner,
+  (req, res) => {
+    try {
+      const result = toggleKeyActive(db, req.params.id);
+
+      if (!result || result.changes === 0) {
+        return res.status(404).json({
+          error: "API-ключ не найден."
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Статус API-ключа изменён."
+      });
+
+    } catch (error) {
+      console.error("Gemini key toggle error:", error.message);
+
+      res.status(500).json({
+        error: "Не удалось изменить статус ключа."
+      });
+    }
+  }
+);
+
+// Удалить ключ.
+app.delete(
+  "/api/admin/gemini-keys/:id",
+  auth,
+  requireOwner,
+  (req, res) => {
+    try {
+      const result = deleteKey(db, req.params.id);
+
+      if (!result || result.changes === 0) {
+        return res.status(404).json({
+          error: "API-ключ не найден."
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "API-ключ удалён."
+      });
+
+    } catch (error) {
+      console.error("Gemini key delete error:", error.message);
+
+      res.status(500).json({
+        error: "Не удалось удалить ключ."
+      });
+    }
+  }
+);
 
 // ==========================================
 // ЛИМИТЫ И ИСПОЛЬЗОВАНИЕ
@@ -796,15 +930,10 @@ function reserveCounter(userId, counter, amount, limit) {
   const date = usageDate();
   const current = getUsage(userId);
 
-  if (current[counter] + amount > limit) {
-    return false;
-  }
+  if (current[counter] + amount > limit) return false;
 
   const allowedColumns = ["messages", "images", "files"];
-
-  if (!allowedColumns.includes(counter)) {
-    return false;
-  }
+  if (!allowedColumns.includes(counter)) return false;
 
   db.prepare(`
     INSERT INTO daily_usage
@@ -862,14 +991,19 @@ function serializableLimits(limits) {
 // ==========================================
 
 app.get("/api/status", (req, res) => {
+  const keys = getGeminiKeys();
+  const activeKeys = keys.filter(isKeyActive).length;
+
   res.json({
     name: "Pinsk AI",
     server: "online",
     model: MODEL,
     imageModel: IMAGE_MODEL,
-    apiKeyConfigured: Boolean(API_KEY),
+    apiKeyConfigured: activeKeys > 0,
+    geminiKeysTotal: keys.length,
+    geminiKeysActive: activeKeys,
     uploadsEnabled: true,
-    imageGenerationEnabled: Boolean(API_KEY)
+    imageGenerationEnabled: activeKeys > 0
   });
 });
 
@@ -926,11 +1060,9 @@ app.get("/api/usage", auth, (req, res) => {
       messages: limits.messages === Infinity
         ? "unlimited"
         : Math.max(0, limits.messages - used.messages),
-
       images: limits.images === Infinity
         ? "unlimited"
         : Math.max(0, limits.images - used.images),
-
       files: limits.files === Infinity
         ? "unlimited"
         : Math.max(0, limits.files - used.files)
@@ -1043,24 +1175,149 @@ app.delete("/api/memory/:id", auth, (req, res) => {
 });
 
 // ==========================================
-// ПОДКЛЮЧЕНИЕ ИИ
+// GEMINI API: ОБЩИЕ ФУНКЦИИ
 // ==========================================
 
-const ai = new OpenAI({
-  apiKey: API_KEY || "missing-api-key",
-  ...(process.env.OPENAI_BASE_URL
-    ? { baseURL: process.env.OPENAI_BASE_URL }
-    : {})
-});
+function makeGeminiSignal(managerSignal) {
+  const timeoutSignal = AbortSignal.timeout(180000);
+
+  if (managerSignal && typeof AbortSignal.any === "function") {
+    return AbortSignal.any([managerSignal, timeoutSignal]);
+  }
+
+  return timeoutSignal;
+}
+
+function convertMessageContent(content) {
+  if (typeof content === "string") {
+    return [{ text: content }];
+  }
+
+  if (!Array.isArray(content)) {
+    return [{ text: String(content ?? "") }];
+  }
+
+  const parts = [];
+
+  for (const item of content) {
+    if (item.type === "text") {
+      parts.push({ text: String(item.text || "") });
+      continue;
+    }
+
+    if (item.type === "image_url") {
+      const url = item.image_url?.url || "";
+
+      const match = url.match(
+        /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/
+      );
+
+      if (match) {
+        parts.push({
+          inlineData: {
+            mimeType: match[1],
+            data: match[2]
+          }
+        });
+      }
+    }
+  }
+
+  return parts;
+}
+
+function convertMessagesToGemini(messages) {
+  const systemMessages = [];
+  const contents = [];
+
+  for (const message of messages) {
+    if (message.role === "system") {
+      const text = typeof message.content === "string"
+        ? message.content
+        : convertMessageContent(message.content)
+          .map(part => part.text || "")
+          .join("\n");
+
+      systemMessages.push(text);
+      continue;
+    }
+
+    const role = message.role === "assistant" ? "model" : "user";
+    const parts = convertMessageContent(message.content);
+
+    if (!parts.length) continue;
+
+    contents.push({
+      role,
+      parts
+    });
+  }
+
+  const result = { contents };
+
+  if (systemMessages.length) {
+    result.systemInstruction = {
+      parts: [{ text: systemMessages.join("\n\n") }]
+    };
+  }
+
+  return result;
+}
+
+async function readGeminiResponse(response) {
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
+  if (!response.ok) {
+    const error = new Error(
+      data?.error?.message ||
+      `Gemini API вернул HTTP ${response.status}`
+    );
+
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
 
 async function askAI(messages) {
-  const response = await ai.chat.completions.create({
-    model: MODEL,
-    messages
-  });
+  const requestBody = convertMessagesToGemini(messages);
 
-  return response.choices[0]?.message?.content ||
-    "Не удалось получить ответ.";
+  return executeWithKeyRotation(
+    db,
+    async (apiKey, { signal }) => {
+      const endpoint =
+        `https://generativelanguage.googleapis.com/v1beta/models/` +
+        `${encodeURIComponent(MODEL)}:generateContent`;
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify(requestBody),
+        signal: makeGeminiSignal(signal)
+      });
+
+      const data = await readGeminiResponse(response);
+
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+
+      const answer = parts
+        .map(part => part.text || "")
+        .filter(Boolean)
+        .join("\n");
+
+      return answer || "Модель не вернула текстовый ответ.";
+    }
+  );
 }
 
 // ==========================================
@@ -1080,9 +1337,9 @@ app.post(
     const files = req.files || [];
 
     try {
-      if (!API_KEY) {
+      if (!hasActiveGeminiKeys()) {
         return res.status(503).json({
-          error: "Не настроен API-ключ Pinsk."
+          error: "Нет активных Gemini API-ключей. Обратись к владельцу Pinsk."
         });
       }
 
@@ -1208,9 +1465,7 @@ app.post(
             }
           });
 
-          fileParts.push(
-            `[Изображение прикреплено: ${filename}]`
-          );
+          fileParts.push(`[Изображение прикреплено: ${filename}]`);
 
         } else {
           const extracted = await extractFileText(file);
@@ -1311,22 +1566,23 @@ app.post(
       });
 
     } catch (error) {
-      console.error("Pinsk AI chat error:", error);
+      console.error("Pinsk AI chat error:", error.message);
 
-      if (messageReserved) {
-        releaseMessage(userId);
-      }
-
+      if (messageReserved) releaseMessage(userId);
       if (filesReserved) {
         releaseCounter(userId, "files", files.length);
       }
 
-      const status = error instanceof multer.MulterError ? 400 : 500;
+      const status = error instanceof multer.MulterError
+        ? 400
+        : (error.status === 429 ? 503 : 500);
 
       res.status(status).json({
         error: error instanceof multer.MulterError
           ? "Ошибка загрузки файла: " + error.message
-          : "Ошибка ИИ-сервера. Проверь настройки модели и API."
+          : status === 503
+            ? "Сейчас все доступные API-ключи заняты или исчерпали квоту. Попробуй немного позже."
+            : "Ошибка ИИ-сервера. Проверь настройки модели и API."
       });
     }
   }
@@ -1337,82 +1593,72 @@ app.post(
 // ==========================================
 
 async function generateGeminiImage(prompt) {
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/` +
-    `${encodeURIComponent(IMAGE_MODEL)}:generateContent`;
+  return executeWithKeyRotation(
+    db,
+    async (apiKey, { signal }) => {
+      const endpoint =
+        `https://generativelanguage.googleapis.com/v1beta/models/` +
+        `${encodeURIComponent(IMAGE_MODEL)}:generateContent`;
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": API_KEY
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify({
+          contents: [
             {
-              text: prompt
+              role: "user",
+              parts: [{ text: prompt }]
             }
-          ]
-        }
-      ],
-      generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"]
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"]
+          }
+        }),
+        signal: makeGeminiSignal(signal)
+      });
+
+      const data = await readGeminiResponse(response);
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+
+      const image = parts.find(part =>
+        part.inlineData?.data || part.inline_data?.data
+      );
+
+      if (!image) {
+        const textResponse = parts
+          .map(part => part.text || "")
+          .filter(Boolean)
+          .join("\n");
+
+        throw new Error(
+          textResponse || "Модель не вернула изображение."
+        );
       }
-    }),
-    signal: AbortSignal.timeout(180000)
-  });
 
-  const data = await response.json();
+      const imageData = image.inlineData || image.inline_data;
 
-  if (!response.ok) {
-    console.error("Gemini image API error:", data);
-
-    const message =
-      data?.error?.message ||
-      "Ошибка генерации изображения.";
-
-    throw new Error(message);
-  }
-
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-
-  const image = parts.find(part =>
-    part.inlineData?.data || part.inline_data?.data
+      return {
+        mimeType: imageData.mimeType || imageData.mime_type || "image/png",
+        data: imageData.data,
+        text: parts
+          .map(part => part.text || "")
+          .filter(Boolean)
+          .join("\n")
+      };
+    }
   );
-
-  if (!image) {
-    const textResponse = parts
-      .map(part => part.text || "")
-      .filter(Boolean)
-      .join("\n");
-
-    throw new Error(
-      textResponse || "Модель не вернула изображение."
-    );
-  }
-
-  const imageData = image.inlineData || image.inline_data;
-
-  return {
-    mimeType: imageData.mimeType || imageData.mime_type || "image/png",
-    data: imageData.data,
-    text: parts
-      .map(part => part.text || "")
-      .filter(Boolean)
-      .join("\n")
-  };
 }
 
 async function imageGenerationHandler(req, res) {
   let reserved = false;
 
   try {
-    if (!API_KEY) {
+    if (!hasActiveGeminiKeys()) {
       return res.status(503).json({
-        error: "Не настроен API-ключ Gemini."
+        error: "Нет активных Gemini API-ключей."
       });
     }
 
@@ -1464,14 +1710,18 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error("Image generation error:", error);
+    console.error("Image generation error:", error.message);
 
     if (reserved) {
       releaseCounter(req.user.id, "images", 1);
     }
 
-    res.status(500).json({
-      error: error.message || "Не удалось создать изображение."
+    const status = error.status === 429 ? 503 : 500;
+
+    res.status(status).json({
+      error: status === 503
+        ? "Сейчас все доступные API-ключи заняты или исчерпали квоту. Попробуй позже."
+        : "Не удалось создать изображение. Проверь настройки модели."
     });
   }
 }
@@ -1482,7 +1732,6 @@ app.post(
   imageGenerationHandler
 );
 
-// Альтернативный адрес для совместимости с интерфейсом.
 app.post(
   "/api/image/generate",
   auth,
@@ -1495,9 +1744,9 @@ app.post(
 
 app.post("/api/analysis", auth, async (req, res) => {
   try {
-    if (!API_KEY) {
+    if (!hasActiveGeminiKeys()) {
       return res.status(503).json({
-        error: "ИИ-модель не настроена на сервере."
+        error: "Нет активных Gemini API-ключей."
       });
     }
 
@@ -1541,10 +1790,12 @@ app.post("/api/analysis", auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Data analysis error:", error);
+    console.error("Data analysis error:", error.message);
 
-    res.status(500).json({
-      error: "Не удалось выполнить анализ данных."
+    res.status(error.status === 429 ? 503 : 500).json({
+      error: error.status === 429
+        ? "Сейчас все доступные API-ключи заняты или исчерпали квоту."
+        : "Не удалось выполнить анализ данных."
     });
   }
 });
@@ -1566,7 +1817,7 @@ app.get("/", (req, res) => {
 // ==========================================
 
 app.use((error, req, res, next) => {
-  console.error("Express error:", error);
+  console.error("Express error:", error.message);
 
   if (res.headersSent) return next(error);
 
@@ -1592,6 +1843,9 @@ app.use((error, req, res, next) => {
 // ==========================================
 
 app.listen(PORT, () => {
+  const keys = getGeminiKeys();
+  const activeKeys = keys.filter(isKeyActive).length;
+
   console.log("================================");
   console.log("          PINSK AI");
   console.log("================================");
@@ -1600,6 +1854,9 @@ app.listen(PORT, () => {
   console.log("Модель чата:", MODEL);
   console.log("Модель изображений:", IMAGE_MODEL);
   console.log("OWNER:", OWNER_EMAIL);
+  console.log("Gemini API-ключей:", keys.length);
+  console.log("Активных Gemini API-ключей:", activeKeys);
+  console.log("Автоматическая ротация: включена");
   console.log("FREE: 100 сообщений в день");
   console.log("FREE: 5 изображений и 5 файлов в день");
   console.log("PRO: безлимит");
