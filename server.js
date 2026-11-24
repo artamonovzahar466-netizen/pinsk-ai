@@ -28,7 +28,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = process.env.IMAGE_MODEL || "gemini-3.1-flash-image";
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
 // Старый ключ используется только для первоначального переноса.
@@ -1003,7 +1003,10 @@ app.get("/api/status", (req, res) => {
     geminiKeysTotal: keys.length,
     geminiKeysActive: activeKeys,
     uploadsEnabled: true,
-    imageGenerationEnabled: activeKeys > 0
+    imageGenerationEnabled: Boolean(
+  process.env.CLOUDFLARE_ACCOUNT_ID &&
+  process.env.CLOUDFLARE_API_TOKEN
+)
   });
 });
 
@@ -1592,73 +1595,104 @@ app.post(
 // ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ GEMINI
 // ==========================================
 
-async function generateGeminiImage(prompt) {
-  return executeWithKeyRotation(
-    db,
-    async (apiKey, { signal }) => {
-      const endpoint =
-        `https://generativelanguage.googleapis.com/v1beta/models/` +
-        `${encodeURIComponent(IMAGE_MODEL)}:generateContent`;
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: prompt }]
-            }
-          ],
-          generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"]
-          }
-        }),
-        signal: makeGeminiSignal(signal)
-      });
+async function generateCloudflareImage(prompt) {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
 
-      const data = await readGeminiResponse(response);
-      const parts = data?.candidates?.[0]?.content?.parts || [];
+  if (!accountId || !apiToken) {
+    throw new Error("Cloudflare API не настроен.");
+  }
 
-      const image = parts.find(part =>
-        part.inlineData?.data || part.inline_data?.data
-      );
+  const endpoint =
+    `https://api.cloudflare.com/client/v4/accounts/` +
+    `${encodeURIComponent(accountId)}/ai/run/${IMAGE_MODEL}`;
 
-      if (!image) {
-        const textResponse = parts
-          .map(part => part.text || "")
-          .filter(Boolean)
-          .join("\n");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      prompt: String(prompt).slice(0, 2048),
+      steps: 4
+    }),
+    signal: AbortSignal.timeout(180000)
+  });
 
-        throw new Error(
-          textResponse || "Модель не вернула изображение."
-        );
-      }
+  const contentType = response.headers.get("content-type") || "";
+  const buffer = Buffer.from(await response.arrayBuffer());
 
-      const imageData = image.inlineData || image.inline_data;
+  if (!response.ok) {
+    let message = `Cloudflare HTTP ${response.status}`;
 
-      return {
-        mimeType: imageData.mimeType || imageData.mime_type || "image/png",
-        data: imageData.data,
-        text: parts
-          .map(part => part.text || "")
-          .filter(Boolean)
-          .join("\n")
-      };
+    try {
+      const errorData = JSON.parse(buffer.toString("utf8"));
+      message =
+        errorData.errors?.map(item => item.message).join("; ") ||
+        errorData.error ||
+        message;
+    } catch {}
+
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+
+  let imageData;
+  let mimeType = "image/png";
+
+  if (contentType.includes("application/json")) {
+    mimeType = "image/jpeg";
+    const data = JSON.parse(buffer.toString("utf8"));
+
+    imageData =
+      data.result?.image ||
+      data.result?.data ||
+      (typeof data.result === "string" ? data.result : null) ||
+      data.image;
+
+    if (typeof imageData !== "string") {
+      throw new Error("Cloudflare не вернул изображение.");
     }
-  );
+
+    imageData = imageData.replace(
+      /^data:image\/[^;]+;base64,/,
+      ""
+    );
+
+  } else if (contentType.startsWith("image/")) {
+    mimeType = contentType.split(";")[0];
+    imageData = buffer.toString("base64");
+
+  } else {
+    throw new Error(
+      "Cloudflare вернул неподдерживаемый формат изображения."
+    );
+  }
+
+  if (!imageData || imageData.length < 100) {
+    throw new Error("Получено пустое изображение.");
+  }
+
+  return {
+    mimeType,
+    data: imageData,
+    text: ""
+  };
 }
 
 async function imageGenerationHandler(req, res) {
   let reserved = false;
 
   try {
-    if (!hasActiveGeminiKeys()) {
+    if (
+      !process.env.CLOUDFLARE_ACCOUNT_ID ||
+      !process.env.CLOUDFLARE_API_TOKEN
+    ) {
       return res.status(503).json({
-        error: "Нет активных Gemini API-ключей."
+        error: "Генерация изображений временно недоступна."
       });
     }
 
@@ -1672,11 +1706,11 @@ async function imageGenerationHandler(req, res) {
       });
     }
 
-    if (prompt.length > 5000) {
-      return res.status(400).json({
-        error: "Описание слишком длинное."
-      });
-    }
+if (prompt.length > 2048) {
+  return res.status(400).json({
+    error: "Описание не должно превышать 2048 символов."
+  });
+}
 
     const limits = limitsFor(req.user);
 
@@ -1698,7 +1732,7 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateGeminiImage(prompt);
+    const result = await generateCloudflareImage(prompt);
 
     res.json({
       success: true,
@@ -1710,18 +1744,24 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error("Image generation error:", error.message);
+    console.error(
+      "Cloudflare image generation error:",
+      error.message
+    );
 
     if (reserved) {
       releaseCounter(req.user.id, "images", 1);
     }
 
-    const status = error.status === 429 ? 503 : 500;
+    const status =
+      error.status === 429 ? 503 :
+      error.status === 401 || error.status === 403 ? 503 :
+      500;
 
     res.status(status).json({
       error: status === 503
-        ? "Сейчас все доступные API-ключи заняты или исчерпали квоту. Попробуй позже."
-        : "Не удалось создать изображение. Проверь настройки модели."
+        ? "Cloudflare временно недоступен или исчерпан лимит генерации. Попробуй позже."
+        : "Не удалось создать изображение. Попробуй изменить описание."
     });
   }
 }
@@ -1737,6 +1777,7 @@ app.post(
   auth,
   imageGenerationHandler
 );
+
 
 // ==========================================
 // АНАЛИЗ ДАННЫХ
