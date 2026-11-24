@@ -12,7 +12,6 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
-const nodemailer = require("nodemailer");
 
 const {
   initGeminiKeysTable,
@@ -32,59 +31,62 @@ const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
+
 // ==========================================
-// GMAIL SMTP
+// RESEND EMAIL API
 // ==========================================
-
-function getMailTransporter() {
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = String(process.env.SMTP_PASS || "").replace(/\s/g, "");
-
-  if (!user || !pass) {
-    throw new Error("SMTP_USER или SMTP_PASS не настроены.");
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: {
-      user,
-      pass
-    },
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000
-  });
-}
 
 async function sendVerificationEmail(email, code) {
-  const transporter = getMailTransporter();
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const apiKey = process.env.RESEND_API_KEY;
 
-  await transporter.sendMail({
-    from: `"Pinsk AI" <${from}>`,
-    to: email,
-    subject: "Код подтверждения Pinsk AI",
-    text:
-      `Твой код подтверждения Pinsk AI: ${code}\n\n` +
-      "Код действует 10 минут.\n" +
-      "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
-        <h2 style="text-align:center">Pinsk AI</h2>
-        <p>Для подтверждения электронной почты введи этот код:</p>
-        <div style="font-size:34px;font-weight:bold;letter-spacing:9px;text-align:center;padding:22px;background:#f2f4f8;border-radius:12px">
-          ${code}
-        </div>
-        <p>Код действует <b>10 минут</b>.</p>
-        <p style="color:#777;font-size:13px">Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.</p>
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY не настроен в Render.");
+  }
+
+  const from = process.env.RESEND_FROM || "Pinsk AI <onboarding@resend.dev>";
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
+      <h2 style="text-align:center">Pinsk AI</h2>
+      <p>Для подтверждения электронной почты введи этот код:</p>
+      <div style="font-size:34px;font-weight:bold;letter-spacing:9px;text-align:center;padding:22px;background:#f2f4f8;border-radius:12px">
+        ${code}
       </div>
-    `
+      <p>Код действует <b>10 минут</b>.</p>
+      <p style="color:#777;font-size:13px">Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.</p>
+    </div>
+  `;
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: "Код подтверждения Pinsk AI",
+      text:
+        `Твой код подтверждения Pinsk AI: ${code}\n\n` +
+        "Код действует 10 минут.\n" +
+        "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
+      html
+    }),
+    signal: AbortSignal.timeout(20000)
   });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      result.message || result.error || `Resend HTTP ${response.status}`
+    );
+  }
+
+  return result;
 }
+
 
 const LEGACY_API_KEY = process.env.OPENAI_API_KEY;
 
