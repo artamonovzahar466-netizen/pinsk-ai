@@ -170,11 +170,11 @@ const upload = multer({
   fileFilter(req, file, callback) {
     const extension = path.extname(file.originalname).toLowerCase();
 
-    const allowed = [
-      ".png", ".jpg", ".jpeg", ".webp", ".gif",
-      ".pdf", ".docx", ".xlsx", ".xls", ".csv",
-      ".txt", ".md", ".json", ".html", ".xml", ".log"
-    ];
+const allowed = [
+  ".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif",
+  ".pdf", ".docx", ".xlsx", ".xls", ".csv",
+  ".txt", ".md", ".json", ".html", ".xml", ".log"
+]
 
     if (!allowed.includes(extension)) {
       return callback(
@@ -194,7 +194,7 @@ function safeFileName(name) {
 
 function isImage(file) {
   return [
-    ".png", ".jpg", ".jpeg", ".webp", ".gif"
+    ".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif"
   ].includes(path.extname(file.originalname).toLowerCase());
 }
 
@@ -250,12 +250,15 @@ function fileMime(file) {
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".jfif": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif"
   };
 
   return types[extension] || file.mimetype || "application/octet-stream";
 }
+
+
 
 // ==========================================
 // БАЗА ДАННЫХ
