@@ -3,55 +3,125 @@
 
 const crypto = require("crypto");
 
-const SECRET_KEY = process.env.ENCRYPTION_SECRET_KEY;
+const LEASE_MS = 35000;
+const HEARTBEAT_MS = 15000;
+const KEY_WAIT_MS = 12000;
+const KEY_WAIT_INTERVAL_MS = 400;
+const MAX_ATTEMPTS = 5;
+const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+const SERVER_COOLDOWN_MS = 5000;
 
-if (
-  typeof SECRET_KEY !== "string" ||
-  SECRET_KEY.trim().length === 0
-) {
-  throw new Error(
-    "CRITICAL ERROR: ENCRYPTION_SECRET_KEY is not configured."
-  );
+let cachedKeys = null;
+
+function deriveKeys() {
+  if (cachedKeys) return cachedKeys;
+
+  const secret = String(process.env.ENCRYPTION_SECRET_KEY || "");
+
+  if (secret.length < 16) {
+    throw new Error(
+      "ENCRYPTION_SECRET_KEY не задан или слишком короткий."
+    );
+  }
+
+  cachedKeys = {
+    encryption: crypto.scryptSync(
+      secret,
+      "pinsk-enc-salt",
+      32
+    ),
+    hmac: crypto.scryptSync(
+      secret,
+      "pinsk-hmac-salt",
+      32
+    )
+  };
+
+  return cachedKeys;
 }
 
-const ENC_KEY = crypto.scryptSync(
-  SECRET_KEY,
-  "pinsk-enc-salt",
-  32
-);
+function hashApiKey(apiKey) {
+  return crypto
+    .createHmac("sha256", deriveKeys().hmac)
+    .update(String(apiKey))
+    .digest("hex");
+}
 
-const HMAC_KEY = crypto.scryptSync(
-  SECRET_KEY,
-  "pinsk-hmac-salt",
-  32
-);
+function encryptApiKey(apiKey) {
+  const iv = crypto.randomBytes(12);
 
-const ALGORITHM = "aes-256-gcm";
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    deriveKeys().encryption,
+    iv
+  );
 
-const LEASE_DURATION_MS = 35000;
-const HEARTBEAT_INTERVAL_MS = 15000;
-const HEARTBEAT_EXTENSION_MS = 30000;
+  const encrypted = Buffer.concat([
+    cipher.update(String(apiKey), "utf8"),
+    cipher.final()
+  ]);
 
-function createAbortError(message = "Request aborted") {
-  const error = new Error(message);
-  error.name = "AbortError";
-  error.code = "ABORT_ERR";
-  return error;
+  return {
+    encrypted_key: encrypted.toString("base64"),
+    iv: iv.toString("base64"),
+    auth_tag: cipher.getAuthTag().toString("base64")
+  };
+}
+
+function decryptApiKey(row) {
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    deriveKeys().encryption,
+    Buffer.from(row.iv, "base64")
+  );
+
+  decipher.setAuthTag(
+    Buffer.from(row.auth_tag, "base64")
+  );
+
+  return Buffer.concat([
+    decipher.update(
+      Buffer.from(row.encrypted_key, "base64")
+    ),
+    decipher.final()
+  ]).toString("utf8");
+}
+
+function maskApiKey(apiKey) {
+  const value = String(apiKey);
+
+  if (value.length <= 8) {
+    return "*".repeat(value.length);
+  }
+
+  return value.slice(0, 4) +
+    "*".repeat(Math.max(4, value.length - 8)) +
+    value.slice(-4);
+}
+
+function hasColumn(db, table, column) {
+  return db.prepare(
+    `PRAGMA table_info(${table})`
+  ).all().some(item => item.name === column);
+}
+
+function addColumnIfMissing(db, table, column, definition) {
+  if (!hasColumn(db, table, column)) {
+    db.exec(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`
+    );
+  }
 }
 
 function initGeminiKeysTable(db) {
-  if (!db || typeof db.exec !== "function") {
-    throw new TypeError("A valid better-sqlite3 database is required.");
-  }
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS gemini_keys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key_hash TEXT,
+      key_hash TEXT UNIQUE NOT NULL,
       masked_key TEXT NOT NULL,
       encrypted_key TEXT NOT NULL,
-      iv TEXT,
-      auth_tag TEXT,
+      iv TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
       is_active INTEGER DEFAULT 1,
       usage_count INTEGER DEFAULT 0,
       error_count INTEGER DEFAULT 0,
@@ -64,153 +134,73 @@ function initGeminiKeysTable(db) {
     );
   `);
 
-  const existingColumns = new Set(
-    db.prepare("PRAGMA table_info(gemini_keys)")
-      .all()
-      .map(column => column.name)
+  addColumnIfMissing(
+    db, "gemini_keys", "key_hash", "TEXT"
   );
 
-  const requiredColumns = [
-    ["key_hash", "TEXT"],
-    ["masked_key", "TEXT"],
-    ["encrypted_key", "TEXT"],
-    ["iv", "TEXT"],
-    ["auth_tag", "TEXT"],
-    ["is_active", "INTEGER DEFAULT 1"],
-    ["usage_count", "INTEGER DEFAULT 0"],
-    ["error_count", "INTEGER DEFAULT 0"],
-    ["last_used", "DATETIME"],
-    ["last_error", "TEXT"],
-    ["cooldown_until", "DATETIME"],
-    ["lease_until", "DATETIME"],
-    ["lease_token", "TEXT"],
-    ["created_at", "DATETIME"]
-  ];
+  addColumnIfMissing(
+    db, "gemini_keys", "masked_key", "TEXT"
+  );
 
-  for (const [name, definition] of requiredColumns) {
-    if (!existingColumns.has(name)) {
-      db.exec(
-        `ALTER TABLE gemini_keys ADD COLUMN ${name} ${definition};`
-      );
-    }
-  }
+  addColumnIfMissing(
+    db, "gemini_keys", "encrypted_key", "TEXT"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "iv", "TEXT"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "auth_tag", "TEXT"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "is_active", "INTEGER DEFAULT 1"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "usage_count", "INTEGER DEFAULT 0"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "error_count", "INTEGER DEFAULT 0"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "last_used", "DATETIME"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "last_error", "TEXT"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "cooldown_until", "DATETIME"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "lease_until", "DATETIME"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "lease_token", "TEXT"
+  );
+
+  addColumnIfMissing(
+    db, "gemini_keys", "created_at",
+    "DATETIME DEFAULT CURRENT_TIMESTAMP"
+  );
 
   db.exec(`
-    UPDATE gemini_keys
-    SET created_at = CURRENT_TIMESTAMP
-    WHERE created_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_gemini_keys_active
+    ON gemini_keys(is_active);
+
+    CREATE INDEX IF NOT EXISTS idx_gemini_keys_lease
+    ON gemini_keys(lease_until);
+
+    CREATE INDEX IF NOT EXISTS idx_gemini_keys_cooldown
+    ON gemini_keys(cooldown_until);
   `);
-
-  const duplicates = db.prepare(`
-    SELECT key_hash, COUNT(*) AS cnt
-    FROM gemini_keys
-    WHERE key_hash IS NOT NULL
-      AND key_hash != ''
-    GROUP BY key_hash
-    HAVING COUNT(*) > 1
-  `).all();
-
-  if (duplicates.length > 0) {
-    throw new Error(
-      "Migration failed: duplicate key_hash entries found."
-    );
-  }
-
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_gemini_keys_key_hash
-    ON gemini_keys(key_hash)
-    WHERE key_hash IS NOT NULL;
-  `);
-}
-
-function hashApiKey(apiKey) {
-  const value = String(apiKey || "").trim();
-
-  if (!value) {
-    throw new Error("API key cannot be empty.");
-  }
-
-  return crypto
-    .createHmac("sha256", HMAC_KEY)
-    .update(value)
-    .digest("hex");
-}
-
-function encryptKey(apiKey) {
-  const trimmed = String(apiKey || "").trim();
-
-  if (!trimmed) {
-    throw new Error("API key cannot be empty.");
-  }
-
-  const iv = crypto.randomBytes(12);
-
-  const cipher = crypto.createCipheriv(
-    ALGORITHM,
-    ENC_KEY,
-    iv
-  );
-
-  let encrypted = cipher.update(
-    trimmed,
-    "utf8",
-    "hex"
-  );
-
-  encrypted += cipher.final("hex");
-
-  const authTag = cipher
-    .getAuthTag()
-    .toString("hex");
-
-  const maskedKey = trimmed.length > 8
-    ? `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`
-    : "****";
-
-  return {
-    key_hash: hashApiKey(trimmed),
-    masked_key: maskedKey,
-    encrypted_key: encrypted,
-    iv: iv.toString("hex"),
-    auth_tag: authTag
-  };
-}
-
-function decryptKey(row) {
-  try {
-    if (
-      !row ||
-      !row.encrypted_key ||
-      !row.iv ||
-      !row.auth_tag
-    ) {
-      throw new Error("Encryption data is incomplete.");
-    }
-
-    const decipher = crypto.createDecipheriv(
-      ALGORITHM,
-      ENC_KEY,
-      Buffer.from(row.iv, "hex")
-    );
-
-    decipher.setAuthTag(
-      Buffer.from(row.auth_tag, "hex")
-    );
-
-    let decrypted = decipher.update(
-      row.encrypted_key,
-      "hex",
-      "utf8"
-    );
-
-    decrypted += decipher.final("utf8");
-
-    return decrypted;
-  } catch (error) {
-    throw new Error(
-      "Failed to decrypt API key. Check ENCRYPTION_SECRET_KEY."
-    );
-  }
 }
 
 function getAllKeys(db) {
@@ -231,27 +221,25 @@ function getAllKeys(db) {
 }
 
 function insertKey(db, apiKey) {
-  const trimmed = String(apiKey || "").trim();
+  const value = String(apiKey || "").trim();
 
-  if (trimmed.length < 15) {
-    throw new Error(
-      "Invalid API key format. Key is too short or empty."
-    );
+  if (value.length < 10 || value.length > 500) {
+    throw new Error("Некорректный Gemini API-ключ.");
   }
 
-  const encrypted = encryptKey(trimmed);
+  const keyHash = hashApiKey(value);
 
   const existing = db.prepare(`
-    SELECT id
-    FROM gemini_keys
+    SELECT id FROM gemini_keys
     WHERE key_hash = ?
-  `).get(encrypted.key_hash);
+  `).get(keyHash);
 
   if (existing) {
-    throw new Error(
-      "This API key is already added to the system."
-    );
+    throw new Error("Этот API-ключ уже добавлен.");
   }
+
+  const encrypted = encryptApiKey(value);
+  const masked = maskApiKey(value);
 
   const result = db.prepare(`
     INSERT INTO gemini_keys (
@@ -259,12 +247,15 @@ function insertKey(db, apiKey) {
       masked_key,
       encrypted_key,
       iv,
-      auth_tag
+      auth_tag,
+      is_active,
+      usage_count,
+      error_count
     )
-    VALUES (?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, 1, 0, 0)
   `).run(
-    encrypted.key_hash,
-    encrypted.masked_key,
+    keyHash,
+    masked,
     encrypted.encrypted_key,
     encrypted.iv,
     encrypted.auth_tag
@@ -272,17 +263,20 @@ function insertKey(db, apiKey) {
 
   return {
     id: result.lastInsertRowid,
-    masked_key: encrypted.masked_key
+    masked_key: masked
   };
 }
 
 function toggleKeyActive(db, id) {
   return db.prepare(`
     UPDATE gemini_keys
-    SET is_active = CASE
-      WHEN is_active = 1 THEN 0
-      ELSE 1
-    END
+    SET
+      is_active = CASE
+        WHEN is_active = 1 THEN 0
+        ELSE 1
+      END,
+      lease_until = NULL,
+      lease_token = NULL
     WHERE id = ?
   `).run(id);
 }
@@ -295,680 +289,445 @@ function deleteKey(db, id) {
 }
 
 function getNextApiKey(db, excludedIds = []) {
-  const nowIso = new Date().toISOString();
+  const excluded = new Set(
+    (excludedIds || []).map(Number)
+  );
 
-  const leaseUntilIso = new Date(
-    Date.now() + LEASE_DURATION_MS
-  ).toISOString();
+  const now = Date.now();
 
-  const leaseToken = crypto.randomUUID();
+  const select = db.prepare(`
+    SELECT *
+    FROM gemini_keys
+    WHERE is_active = 1
+      AND (
+        cooldown_until IS NULL
+        OR CAST(cooldown_until AS INTEGER) <= ?
+        OR datetime(cooldown_until) <= datetime('now')
+      )
+      AND (
+        lease_until IS NULL
+        OR CAST(lease_until AS INTEGER) <= ?
+        OR datetime(lease_until) <= datetime('now')
+      )
+    ORDER BY
+      error_count ASC,
+      usage_count ASC,
+      last_used ASC,
+      id ASC
+  `);
 
-  // ИСПРАВЛЕНО:
-  // Создаём функцию транзакции, не запускаем её сразу.
+  const update = db.prepare(`
+    UPDATE gemini_keys
+    SET
+      lease_until = ?,
+      lease_token = ?,
+      last_used = CURRENT_TIMESTAMP
+    WHERE id = ?
+      AND is_active = 1
+      AND (
+        lease_until IS NULL
+        OR CAST(lease_until AS INTEGER) <= ?
+        OR datetime(lease_until) <= datetime('now')
+      )
+  `);
+
   const transaction = db.transaction(() => {
-    let query = `
-      SELECT *
-      FROM gemini_keys
-      WHERE is_active = 1
-        AND (
-          cooldown_until IS NULL
-          OR julianday(cooldown_until) <= julianday(?)
-        )
-        AND (
-          lease_until IS NULL
-          OR julianday(lease_until) <= julianday(?)
-        )
-    `;
+    const candidates = select.all(now, now);
 
-    const params = [nowIso, nowIso];
+    for (const row of candidates) {
+      if (excluded.has(Number(row.id))) continue;
 
-    if (excludedIds.length > 0) {
-      const placeholders = excludedIds
-        .map(() => "?")
-        .join(",");
+      const leaseToken = crypto.randomUUID();
+      const leaseUntil = now + LEASE_MS;
 
-      query += ` AND id NOT IN (${placeholders})`;
+      const result = update.run(
+        leaseUntil,
+        leaseToken,
+        row.id,
+        now
+      );
 
-      params.push(...excludedIds);
+      if (result.changes !== 1) continue;
+
+      return {
+        id: row.id,
+        apiKey: decryptApiKey(row),
+        leaseToken
+      };
     }
 
-    query += `
-      ORDER BY usage_count ASC, last_used ASC
-      LIMIT 1
-    `;
-
-    const row = db.prepare(query).get(...params);
-
-    if (!row) {
-      return null;
-    }
-
-    const updateResult = db.prepare(`
-      UPDATE gemini_keys
-      SET lease_until = ?,
-          lease_token = ?
-      WHERE id = ?
-        AND (
-          lease_until IS NULL
-          OR julianday(lease_until) <= julianday(?)
-        )
-    `).run(
-      leaseUntilIso,
-      leaseToken,
-      row.id,
-      nowIso
-    );
-
-    if (updateResult.changes !== 1) {
-      return null;
-    }
-
-    return {
-      ...row,
-      leaseToken
-    };
+    return null;
   });
 
-  let leased = null;
-
-  for (let attempt = 0; attempt < 3 && !leased; attempt++) {
-    // Запускаем транзакцию здесь.
-    leased = transaction.immediate();
-  }
-
-  if (!leased) {
-    return null;
-  }
-
-  try {
-    const apiKey = decryptKey(leased);
-
-    return {
-      id: leased.id,
-      apiKey,
-      leaseToken: leased.leaseToken
-    };
-  } catch (error) {
-    releaseKeyLease(
-      db,
-      leased.id,
-      leased.leaseToken
-    );
-
-    throw error;
-  }
+  return transaction.immediate();
 }
 
-function releaseKeyLease(db, keyId, leaseToken) {
-  if (!keyId || !leaseToken) {
-    return false;
-  }
-
-  const result = db.prepare(`
-    UPDATE gemini_keys
-    SET lease_until = NULL,
-        lease_token = NULL
-    WHERE id = ?
-      AND lease_token = ?
-  `).run(keyId, leaseToken);
-
-  return result.changes > 0;
-}
-
-function extendKeyLease(
-  db,
-  keyId,
-  leaseToken,
-  additionalMs = HEARTBEAT_EXTENSION_MS
-) {
-  if (!keyId || !leaseToken) {
-    return false;
-  }
-
-  const nowIso = new Date().toISOString();
-
-  const newLeaseUntilIso = new Date(
-    Date.now() + additionalMs
-  ).toISOString();
-
-  const result = db.prepare(`
+function extendKeyLease(db, keyId, leaseToken) {
+  return db.prepare(`
     UPDATE gemini_keys
     SET lease_until = ?
     WHERE id = ?
       AND lease_token = ?
-      AND lease_until IS NOT NULL
-      AND julianday(lease_until) > julianday(?)
+      AND is_active = 1
   `).run(
-    newLeaseUntilIso,
+    Date.now() + LEASE_MS,
     keyId,
-    leaseToken,
-    nowIso
+    leaseToken
   );
-
-  return result.changes > 0;
 }
 
 function recordKeyResultAndRelease(
   db,
   keyId,
   leaseToken,
-  options = {}
+  result = {}
 ) {
-  const {
-    isError = false,
-    safeErrorMsg = null,
-    cooldownUntilIso = null,
-    disableKey = false
-  } = options;
+  const success = result.success === true;
+  const errorMessage = result.error
+    ? String(result.error.message || result.error).slice(0, 1000)
+    : null;
 
-  const nowIso = new Date().toISOString();
-
-  // ИСПРАВЛЕНО:
-  // Создаём функцию транзакции отдельно.
-  const transaction = db.transaction(() => {
-    const current = db.prepare(`
-      SELECT lease_token, lease_until
-      FROM gemini_keys
+  if (success) {
+    return db.prepare(`
+      UPDATE gemini_keys
+      SET
+        usage_count = usage_count + 1,
+        error_count = MAX(0, error_count - 1),
+        last_error = NULL,
+        cooldown_until = NULL,
+        lease_until = NULL,
+        lease_token = NULL
       WHERE id = ?
-    `).get(keyId);
-
-    if (
-      !current ||
-      current.lease_token !== leaseToken ||
-      !current.lease_until ||
-      !(
-        new Date(current.lease_until).getTime() >
-        Date.now()
-      )
-    ) {
-      return false;
-    }
-
-    let result;
-
-    if (disableKey) {
-      result = db.prepare(`
-        UPDATE gemini_keys
-        SET is_active = 0,
-            last_error = ?,
-            lease_until = NULL,
-            lease_token = NULL
-        WHERE id = ?
-          AND lease_token = ?
-      `).run(
-        safeErrorMsg || "Key disabled",
-        keyId,
-        leaseToken
-      );
-    } else if (cooldownUntilIso) {
-      result = db.prepare(`
-        UPDATE gemini_keys
-        SET error_count = error_count + 1,
-            last_error = ?,
-            cooldown_until = ?,
-            lease_until = NULL,
-            lease_token = NULL
-        WHERE id = ?
-          AND lease_token = ?
-      `).run(
-        safeErrorMsg || "Rate limit",
-        cooldownUntilIso,
-        keyId,
-        leaseToken
-      );
-    } else if (isError) {
-      result = db.prepare(`
-        UPDATE gemini_keys
-        SET error_count = error_count + 1,
-            last_error = ?,
-            last_used = ?,
-            lease_until = NULL,
-            lease_token = NULL
-        WHERE id = ?
-          AND lease_token = ?
-      `).run(
-        safeErrorMsg || "API error",
-        nowIso,
-        keyId,
-        leaseToken
-      );
-    } else {
-      result = db.prepare(`
-        UPDATE gemini_keys
-        SET usage_count = usage_count + 1,
-            last_used = ?,
-            last_error = NULL,
-            lease_until = NULL,
-            lease_token = NULL
-        WHERE id = ?
-          AND lease_token = ?
-      `).run(
-        nowIso,
-        keyId,
-        leaseToken
-      );
-    }
-
-    return result.changes === 1;
-  });
-
-  // Запускаем транзакцию и возвращаем её результат.
-  return transaction.immediate();
-}
-
-function isNetworkOrTransientError(error) {
-  if (!error) {
-    return false;
+        AND lease_token = ?
+    `).run(keyId, leaseToken);
   }
 
-  const message = String(
-    error.message || ""
-  ).toLowerCase();
+  const cooldownUntil = result.cooldownUntil || null;
 
-  const code = String(
-    error.code || error.cause?.code || ""
-  ).toLowerCase();
-
-  const networkCodes = [
-    "econnreset",
-    "etimedout",
-    "enotfound",
-    "eai_again",
-    "econnrefused",
-    "ehostunreach",
-    "enetunreach"
-  ];
-
-  if (networkCodes.includes(code)) {
-    return true;
-  }
-
-  if (
-    error instanceof TypeError ||
-    message.includes("failed to fetch") ||
-    message.includes("network error") ||
-    message.includes("networkrequestfailed")
-  ) {
-    return true;
-  }
-
-  return false;
+  return db.prepare(`
+    UPDATE gemini_keys
+    SET
+      error_count = error_count + 1,
+      last_error = ?,
+      cooldown_until = COALESCE(?, cooldown_until),
+      lease_until = NULL,
+      lease_token = NULL
+    WHERE id = ?
+      AND lease_token = ?
+  `).run(
+    errorMessage,
+    cooldownUntil,
+    keyId,
+    leaseToken
+  );
 }
 
 function getErrorStatus(error) {
-  return (
-    error?.status ||
-    error?.statusCode ||
-    error?.response?.status ||
-    0
-  );
+  const status = Number(error?.status || error?.statusCode);
+
+  return Number.isFinite(status) ? status : 0;
+}
+
+function getErrorCode(error) {
+  return String(
+    error?.code ||
+    error?.cause?.code ||
+    ""
+  ).toUpperCase();
 }
 
 function isQuotaError(error) {
   const status = getErrorStatus(error);
+  const message = String(error?.message || "").toLowerCase();
 
-  const message = String(
-    error?.message || ""
-  ).toLowerCase();
+  return status === 429 ||
+    message.includes("quota exceeded") ||
+    message.includes("resource_exhausted") ||
+    message.includes("rate limit") ||
+    message.includes("requests per minute") ||
+    message.includes("limit exceeded");
+}
+
+function isInvalidKeyError(error) {
+  const status = getErrorStatus(error);
+  const message = String(error?.message || "").toLowerCase();
+
+  if (status === 401) return true;
 
   return (
+    (status === 400 || status === 403) &&
+    (
+      message.includes("api key not valid") ||
+      message.includes("invalid api key") ||
+      message.includes("api_key_invalid") ||
+      message.includes("permission denied") ||
+      message.includes("key is not valid")
+    )
+  );
+}
+
+function isNetworkError(error) {
+  const code = getErrorCode(error);
+  const message = String(error?.message || "").toLowerCase();
+
+  const networkCodes = [
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ECONNABORTED",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "EPIPE",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET"
+  ];
+
+  return networkCodes.includes(code) ||
+    message.includes("fetch failed") ||
+    message.includes("failed to fetch") ||
+    message.includes("network error") ||
+    message.includes("socket hang up") ||
+    message.includes("timed out") ||
+    message.includes("timeout");
+}
+
+function isTransientError(error) {
+  const status = getErrorStatus(error);
+
+  return (
+    status === 408 ||
+    status === 425 ||
     status === 429 ||
-    message.includes("resource has been exhausted") ||
-    message.includes("quota exceeded")
+    status >= 500 ||
+    isNetworkError(error)
   );
 }
 
 function isServerTransientError(error) {
   const status = getErrorStatus(error);
 
-  const message = String(
-    error?.message || ""
-  ).toLowerCase();
-
-  return (
-    (status >= 500 && status < 600) ||
-    message.includes("service unavailable")
-  );
+  return status === 408 ||
+    status === 425 ||
+    status >= 500 ||
+    isNetworkError(error);
 }
 
-function isConfirmedInvalidKey(error) {
-  const status = getErrorStatus(error);
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  const message = String(
-    error?.message || ""
-  ).toLowerCase();
+async function waitForAvailableKey(db, excludedIds, startedAt) {
+  while (Date.now() - startedAt < KEY_WAIT_MS) {
+    const key = getNextApiKey(db, excludedIds);
 
-  const invalidMessage =
-    message.includes("api_key_invalid") ||
-    message.includes("api key not valid") ||
-    message.includes("key expired") ||
-    message.includes("api key not found");
+    if (key) return key;
 
-  return (
-    [400, 401, 403].includes(status) &&
-    invalidMessage
-  );
+    await wait(KEY_WAIT_INTERVAL_MS);
+  }
+
+  return null;
 }
 
 async function executeWithKeyRotation(
   db,
-  apiCallFn,
-  externalOptions = {}
+  callback,
+  options = {}
 ) {
-  if (typeof apiCallFn !== "function") {
-    throw new TypeError("apiCallFn must be a function.");
+  if (typeof callback !== "function") {
+    throw new TypeError("Не передана функция запроса к Gemini.");
   }
 
-  const externalSignal = externalOptions.signal;
+  const excludedIds = new Set();
+  const maxAttempts = Math.max(
+    1,
+    Math.min(
+      Number(options.maxAttempts) || MAX_ATTEMPTS,
+      20
+    )
+  );
 
-  if (
-    externalSignal &&
-    externalSignal.aborted
-  ) {
-    throw createAbortError(
-      "Request aborted by user."
-    );
-  }
-
-  const totalActiveRow = db.prepare(`
-    SELECT COUNT(*) AS cnt
-    FROM gemini_keys
-    WHERE is_active = 1
-  `).get();
-
-  const totalActive = totalActiveRow
-    ? totalActiveRow.cnt
-    : 0;
-
-  if (totalActive === 0) {
-    throw new Error(
-      "No active Gemini API keys available. Add keys in the OWNER panel."
-    );
-  }
-
-  const triedKeyIds = [];
-
+  const startedAt = Date.now();
+  let lastError = null;
   let attempts = 0;
 
-  let lastSafeError =
-    "All available keys are exhausted or locked.";
+  while (attempts < maxAttempts) {
+    let key = getNextApiKey(db, [...excludedIds]);
 
-  while (attempts < totalActive) {
-    if (
-      externalSignal &&
-      externalSignal.aborted
-    ) {
-      throw createAbortError(
-        "Request aborted by user."
+    if (!key && attempts === 0) {
+      key = await waitForAvailableKey(
+        db,
+        [...excludedIds],
+        startedAt
       );
     }
 
-    const keyObj = getNextApiKey(
-      db,
-      triedKeyIds
-    );
+    if (!key) break;
 
-    if (!keyObj) {
-      break;
-    }
+    attempts += 1;
+    excludedIds.add(Number(key.id));
 
-    triedKeyIds.push(keyObj.id);
-    attempts++;
+    const controller = new AbortController();
 
-    const abortController = new AbortController();
-
-    let leaseLost = false;
-    let heartbeatError = null;
-    let requestSettled = false;
-
-    const onExternalAbort = () => {
-      if (!requestSettled) {
-        abortController.abort(
-          createAbortError("Request aborted by user.")
-        );
-      }
-    };
-
-    if (externalSignal) {
-      externalSignal.addEventListener(
-        "abort",
-        onExternalAbort,
-        { once: true }
-      );
-    }
-
-    if (
-      externalSignal &&
-      externalSignal.aborted
-    ) {
-      onExternalAbort();
-    }
-
-    const heartbeatInterval = setInterval(() => {
-      if (requestSettled || leaseLost || heartbeatError) {
-        return;
-      }
-
+    const heartbeat = setInterval(() => {
       try {
-        const extended = extendKeyLease(
+        extendKeyLease(
           db,
-          keyObj.id,
-          keyObj.leaseToken,
-          HEARTBEAT_EXTENSION_MS
+          key.id,
+          key.leaseToken
         );
-
-        if (!extended) {
-          leaseLost = true;
-
-          abortController.abort(
-            new Error("KEY_LEASE_LOST")
-          );
-        }
       } catch (error) {
-        heartbeatError = error;
-
-        abortController.abort(
-          new Error("KEY_LEASE_DATABASE_ERROR")
+        console.error(
+          "Gemini key lease heartbeat error:",
+          error.message
         );
       }
-    }, HEARTBEAT_INTERVAL_MS);
+    }, HEARTBEAT_MS);
 
-    if (typeof heartbeatInterval.unref === "function") {
-      heartbeatInterval.unref();
+    if (typeof heartbeat.unref === "function") {
+      heartbeat.unref();
     }
 
-    let result;
-    let apiError = null;
+    let finished = false;
 
     try {
-      result = await apiCallFn(
-        keyObj.apiKey,
+      const result = await callback(
+        key.apiKey,
         {
-          signal: abortController.signal
+          signal: controller.signal,
+          keyId: key.id,
+          attempt: attempts
         }
       );
-    } catch (error) {
-      apiError = error;
-    } finally {
-      requestSettled = true;
 
-      clearInterval(heartbeatInterval);
-
-      if (externalSignal) {
-        externalSignal.removeEventListener(
-          "abort",
-          onExternalAbort
-        );
-      }
-    }
-
-    if (
-      externalSignal &&
-      externalSignal.aborted
-    ) {
-      releaseKeyLease(
+      recordKeyResultAndRelease(
         db,
-        keyObj.id,
-        keyObj.leaseToken
+        key.id,
+        key.leaseToken,
+        { success: true }
       );
 
-      throw createAbortError(
-        "Request aborted by user."
-      );
-    }
-
-    if (heartbeatError) {
-      releaseKeyLease(
-        db,
-        keyObj.id,
-        keyObj.leaseToken
-      );
-
-      throw heartbeatError;
-    }
-
-    if (leaseLost) {
-      lastSafeError =
-        "Key lease was lost. Trying another key.";
-
-      continue;
-    }
-
-    if (!apiError) {
-      const successRecorded = recordKeyResultAndRelease(
-        db,
-        keyObj.id,
-        keyObj.leaseToken,
-        { isError: false }
-      );
-
-      if (!successRecorded) {
-        lastSafeError =
-          "Key lease ownership was lost before completion.";
-
-        continue;
-      }
-
+      finished = true;
       return result;
-    }
 
-    if (
-      apiError.code === "KEY_LEASE_LOST" ||
-      apiError.message === "KEY_LEASE_LOST"
-    ) {
-      lastSafeError =
-        "Key lease was lost. Trying another key.";
+    } catch (error) {
+      lastError = error;
 
-      continue;
-    }
+      const status = getErrorStatus(error);
+      const invalidKey = isInvalidKeyError(error);
+      const quotaError = isQuotaError(error);
+      const transientError = isTransientError(error);
 
-    const status = getErrorStatus(apiError);
+      let cooldownUntil = null;
 
-    if (isQuotaError(apiError)) {
-      const cooldownUntilIso = new Date(
-        Date.now() + 10 * 60 * 1000
-      ).toISOString();
+      if (quotaError) {
+        cooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
+      } else if (isServerTransientError(error)) {
+        cooldownUntil = Date.now() + SERVER_COOLDOWN_MS;
+      }
 
-      const recorded = recordKeyResultAndRelease(
+      recordKeyResultAndRelease(
         db,
-        keyObj.id,
-        keyObj.leaseToken,
+        key.id,
+        key.leaseToken,
         {
-          isError: true,
-          safeErrorMsg: "Rate limit (429)",
-          cooldownUntilIso
+          success: false,
+          error,
+          cooldownUntil
         }
       );
 
-      if (!recorded) {
-        lastSafeError =
-          "Key lease was lost. Trying another key.";
+      finished = true;
+
+      if (invalidKey) {
+        try {
+          db.prepare(`
+            UPDATE gemini_keys
+            SET
+              is_active = 0,
+              last_error = ?,
+              lease_until = NULL,
+              lease_token = NULL
+            WHERE id = ?
+          `).run(
+            String(error.message || "Invalid API key").slice(0, 1000),
+            key.id
+          );
+        } catch (dbError) {
+          console.error(
+            "Gemini invalid key update error:",
+            dbError.message
+          );
+        }
+
+        console.error(
+          `Gemini key #${key.id} disabled: invalid API key.`
+        );
 
         continue;
       }
 
-      lastSafeError =
-        "API rate limit exceeded. Rotating key.";
-
-      continue;
-    }
-
-    if (
-      isNetworkOrTransientError(apiError) ||
-      isServerTransientError(apiError)
-    ) {
-      const recorded = recordKeyResultAndRelease(
-        db,
-        keyObj.id,
-        keyObj.leaseToken,
-        {
-          isError: true,
-          safeErrorMsg:
-            `Transient network/server error (${status || "network"})`
-        }
-      );
-
-      if (!recorded) {
-        lastSafeError =
-          "Key lease was lost. Trying another key.";
+      if (transientError || quotaError) {
+        console.error("Gemini key request failed:", {
+          keyId: key.id,
+          status,
+          code: getErrorCode(error) || null,
+          attempt: attempts,
+          message: String(error.message || error).slice(0, 500)
+        });
 
         continue;
       }
 
-      lastSafeError =
-        "Transient server or network error. Rotating key.";
+      throw error;
 
-      continue;
-    }
+    } finally {
+      clearInterval(heartbeat);
 
-    if (isConfirmedInvalidKey(apiError)) {
-      const recorded = recordKeyResultAndRelease(
-        db,
-        keyObj.id,
-        keyObj.leaseToken,
-        {
-          disableKey: true,
-          safeErrorMsg: "Key disabled: invalid credentials"
+      if (!finished) {
+        try {
+          controller.abort();
+
+          recordKeyResultAndRelease(
+            db,
+            key.id,
+            key.leaseToken,
+            {
+              success: false,
+              error: new Error("Запрос был прерван.")
+            }
+          );
+        } catch (releaseError) {
+          console.error(
+            "Gemini key release error:",
+            releaseError.message
+          );
         }
-      );
-
-      if (!recorded) {
-        lastSafeError =
-          "Key lease was lost. Trying another key.";
-
-        continue;
       }
-
-      lastSafeError =
-        "API key invalid or expired.";
-
-      continue;
     }
-
-    const errorRecorded = recordKeyResultAndRelease(
-      db,
-      keyObj.id,
-      keyObj.leaseToken,
-      {
-        isError: true,
-        safeErrorMsg: "Request error"
-      }
-    );
-
-    if (!errorRecorded) {
-      lastSafeError =
-        "Key lease was lost. Trying another key.";
-
-      continue;
-    }
-
-    throw apiError;
   }
 
-  throw new Error(
-    lastSafeError ||
-    "All available Gemini API keys are currently cooling down or locked."
+  if (lastError) {
+    const error = new Error(
+      "Не удалось выполнить запрос после проверки доступных Gemini API-ключей. " +
+      String(lastError.message || "").slice(0, 500)
+    );
+
+    error.status = getErrorStatus(lastError);
+    error.code = getErrorCode(lastError);
+    error.cause = lastError;
+
+    throw error;
+  }
+
+  const error = new Error(
+    "Все Gemini API-ключи временно заняты, отключены или находятся на паузе."
   );
+
+  error.status = 503;
+  error.code = "NO_AVAILABLE_GEMINI_KEYS";
+
+  throw error;
 }
 
 module.exports = {
@@ -978,7 +737,6 @@ module.exports = {
   toggleKeyActive,
   deleteKey,
   getNextApiKey,
-  releaseKeyLease,
   extendKeyLease,
   recordKeyResultAndRelease,
   executeWithKeyRotation
