@@ -1,4 +1,3 @@
-
 "use strict";
 
 const express = require("express");
@@ -12,7 +11,6 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
-const nodemailer = require("nodemailer");
 
 const {
   initGeminiKeysTable,
@@ -24,48 +22,6 @@ const {
 } = require("./key-manager");
 
 dotenv.config();
-// ==========================================
-// EMAIL: BREVO SMTP
-// ==========================================
-
-const mailer = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp-relay.brevo.com",
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: Number(process.env.SMTP_PORT || 587) === 465,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
-
-async function sendVerificationEmail(email, name, code) {
-  if (
-    !process.env.SMTP_USER ||
-    !process.env.SMTP_PASS ||
-    !process.env.SMTP_FROM
-  ) {
-    throw new Error("Почтовый сервер не настроен.");
-  }
-
-  await mailer.sendMail({
-    from: `"Pinsk AI" <${process.env.SMTP_FROM}>`,
-    to: email,
-    subject: "Подтверждение регистрации Pinsk AI",
-    text:
-      `Здравствуйте, ${name}!\n\n` +
-      `Ваш код подтверждения: ${code}\n\n` +
-      `Код действует 10 минут.`,
-    html: `
-      <div style="font-family:Arial,sans-serif;padding:25px">
-        <h2>Pinsk AI</h2>
-        <p>Здравствуйте, ${String(name).replace(/[&<>"']/g, "")}!</p>
-        <p>Ваш код подтверждения:</p>
-        <h1 style="letter-spacing:8px">${code}</h1>
-        <p>Код действует 10 минут.</p>
-      </div>
-    `
-  });
-}
 
 const app = express();
 
@@ -74,7 +30,6 @@ const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
-// Старый ключ используется только для первоначального переноса.
 const LEGACY_API_KEY = process.env.OPENAI_API_KEY;
 
 const DATA_DIR = process.env.DATA_DIR
@@ -110,11 +65,8 @@ const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// Инициализация таблицы зашифрованных Gemini-ключей.
 initGeminiKeysTable(db);
 
-// Однократный перенос старого ключа из OPENAI_API_KEY.
-// Если таблица уже содержит ключи, перенос не выполняется.
 if (LEGACY_API_KEY && getAllKeys(db).length === 0) {
   try {
     insertKey(db, LEGACY_API_KEY.trim());
@@ -192,6 +144,7 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: "25mb" }));
+
 app.use(express.urlencoded({
   extended: true,
   limit: "25mb"
@@ -213,11 +166,11 @@ const upload = multer({
   fileFilter(req, file, callback) {
     const extension = path.extname(file.originalname).toLowerCase();
 
-const allowed = [
-  ".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif",
-  ".pdf", ".docx", ".xlsx", ".xls", ".csv",
-  ".txt", ".md", ".json", ".html", ".xml", ".log"
-]
+    const allowed = [
+      ".png", ".jpg", ".jpeg", ".jfif", ".webp", ".gif",
+      ".pdf", ".docx", ".xlsx", ".xls", ".csv",
+      ".txt", ".md", ".json", ".html", ".xml", ".log"
+    ];
 
     if (!allowed.includes(extension)) {
       return callback(
@@ -301,8 +254,6 @@ function fileMime(file) {
   return types[extension] || file.mimetype || "application/octet-stream";
 }
 
-
-
 // ==========================================
 // БАЗА ДАННЫХ
 // ==========================================
@@ -351,18 +302,6 @@ db.exec(`
     images INTEGER NOT NULL DEFAULT 0,
     files INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, usage_date)
-  );
-
-  CREATE TABLE IF NOT EXISTS pending_registrations (
-    email TEXT PRIMARY KEY COLLATE NOCASE,
-    name TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    code_salt TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    last_sent_at INTEGER NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 `);
 
@@ -425,6 +364,7 @@ function verifyPassword(password, stored) {
   if (!stored || typeof stored !== "string") return false;
 
   const [salt, hash] = stored.split(":");
+
   if (!salt || !hash) return false;
 
   const actual = Buffer.from(passwordHash(password, salt), "hex");
@@ -433,21 +373,7 @@ function verifyPassword(password, stored) {
   return actual.length === expected.length &&
     crypto.timingSafeEqual(actual, expected);
 }
-// ==========================================
-// КОД ПОДТВЕРЖДЕНИЯ EMAIL
-// ==========================================
 
-function generateVerificationCode() {
-  return crypto.randomInt(0, 1000000)
-    .toString()
-    .padStart(6, "0");
-}
-
-function hashVerificationCode(code, salt) {
-  return crypto.createHash("sha256")
-    .update(`${salt}:${code}`)
-    .digest("hex");
-}
 function cookieToken(req) {
   const cookies = (req.headers.cookie || "").split(";");
 
@@ -527,6 +453,7 @@ function auth(req, res, next) {
 
     if (!session) {
       clearSessionCookie(res, req);
+
       return res.status(401).json({
         error: "Сессия истекла. Войди в аккаунт."
       });
@@ -540,6 +467,7 @@ function auth(req, res, next) {
 
     if (!user) {
       clearSessionCookie(res, req);
+
       return res.status(401).json({
         error: "Аккаунт не найден."
       });
@@ -551,6 +479,7 @@ function auth(req, res, next) {
     ) {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
+
       user.role = "OWNER";
     }
 
@@ -600,11 +529,13 @@ function issueSession(user, res, req) {
 }
 
 // ==========================================
-// РЕГИСТРАЦИЯ
+// РЕГИСТРАЦИЯ БЕЗ EMAIL-ПОДТВЕРЖДЕНИЯ
 // ==========================================
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", (req, res) => {
   try {
+    res.setHeader("Cache-Control", "no-store");
+
     const name = String(req.body.name || "").trim();
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
@@ -615,7 +546,10 @@ app.post("/api/auth/register", async (req, res) => {
       });
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (
+      email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ) {
       return res.status(400).json({
         error: "Введи правильный email."
       });
@@ -637,237 +571,77 @@ app.post("/api/auth/register", async (req, res) => {
       });
     }
 
-    const code = generateVerificationCode();
-    const salt = crypto.randomBytes(16).toString("hex");
-    const codeHash = hashVerificationCode(code, salt);
+    const userId = crypto.randomUUID();
     const passwordHashValue = makePasswordHash(password);
-    const now = Date.now();
+    const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
 
-    await sendVerificationEmail(email, name, code);
-
-    db.prepare(`
-      INSERT INTO pending_registrations (
-        email,
-        name,
-        password_hash,
-        code_hash,
-        code_salt,
-        expires_at,
-        last_sent_at,
-        attempts
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-      ON CONFLICT(email) DO UPDATE SET
-        name = excluded.name,
-        password_hash = excluded.password_hash,
-        code_hash = excluded.code_hash,
-        code_salt = excluded.code_salt,
-        expires_at = excluded.expires_at,
-        last_sent_at = excluded.last_sent_at,
-        attempts = 0
-    `).run(
-      email,
-      name,
-      passwordHashValue,
-      codeHash,
-      salt,
-      now + 10 * 60 * 1000,
-      now
-    );
-
-    res.json({
-      success: true,
-      verificationRequired: true,
-      message: "Код подтверждения отправлен на email."
-    });
-
-  } catch (error) {
-    console.error("Registration error:", error.message);
-
-    res.status(500).json({
-      error: error.message === "Почтовый сервер не настроен."
-        ? error.message
-        : "Не удалось отправить код подтверждения. Проверь настройки почты и попробуй снова."
-    });
-  }
-});
-
-app.post("/api/auth/verify-email", (req, res) => {
-  try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const code = String(req.body.code || "").trim();
-
-    res.set("Cache-Control", "no-store");
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({
-        error: "Введи правильный email."
-      });
-    }
-
-    if (!/^\d{6}$/.test(code)) {
-      return res.status(400).json({
-        error: "Введи шестизначный код."
-      });
-    }
-
-    const pending = db.prepare(`
-      SELECT *
-      FROM pending_registrations
-      WHERE email = ?
-    `).get(email);
-
-    if (!pending) {
-      return res.status(400).json({
-        error: "Заявка на регистрацию не найдена. Начни регистрацию заново."
-      });
-    }
-
-    if (Date.now() > pending.expires_at) {
-      db.prepare(`
-        DELETE FROM pending_registrations WHERE email = ?
-      `).run(email);
-
-      return res.status(400).json({
-        error: "Срок действия кода истёк. Начни регистрацию заново."
-      });
-    }
-
-    if (pending.attempts >= 5) {
-      db.prepare(`
-        DELETE FROM pending_registrations WHERE email = ?
-      `).run(email);
-
-      return res.status(429).json({
-        error: "Превышено количество попыток. Начни регистрацию заново."
-      });
-    }
-
-    const actualHash = Buffer.from(
-      hashVerificationCode(code, pending.code_salt),
-      "hex"
-    );
-
-    const expectedHash = Buffer.from(pending.code_hash, "hex");
-
-    const isValid =
-      actualHash.length === expectedHash.length &&
-      crypto.timingSafeEqual(actualHash, expectedHash);
-
-    if (!isValid) {
-      const updateResult = db.prepare(`
-        UPDATE pending_registrations
-        SET attempts = attempts + 1
-        WHERE email = ? AND attempts < 5
-      `).run(email);
-
-      if (updateResult.changes === 0) {
-        return res.status(429).json({
-          error: "Превышено количество попыток. Начни регистрацию заново."
-        });
-      }
-
-      const updated = db.prepare(`
-        SELECT attempts
-        FROM pending_registrations
-        WHERE email = ?
-      `).get(email);
-
-      if (updated && updated.attempts >= 5) {
-        db.prepare(`
-          DELETE FROM pending_registrations WHERE email = ?
-        `).run(email);
-
-        return res.status(429).json({
-          error: "Превышено количество попыток. Начни регистрацию заново."
-        });
-      }
-
-      return res.status(400).json({
-        error: "Неверный код подтверждения."
-      });
-    }
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
     const createAccount = db.transaction(() => {
-      const current = db.prepare(`
-        SELECT *
-        FROM pending_registrations
-        WHERE email = ?
-      `).get(email);
-
-      if (!current || Date.now() > current.expires_at || current.attempts >= 5) {
-        throw new Error("CODE_EXPIRED");
-      }
-
-      const existing = db.prepare(`
-        SELECT id FROM users WHERE email = ?
-      `).get(email);
-
-      if (existing) {
-        db.prepare(`
-          DELETE FROM pending_registrations WHERE email = ?
-        `).run(email);
-
-        throw new Error("ACCOUNT_EXISTS");
-      }
-
-      const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
-
-     const userId = crypto.randomUUID();
-
-db.prepare(`
-  INSERT INTO users (id, name, email, password_hash, role)
-  VALUES (?, ?, ?, ?, ?)
-`).run(
-  userId,
-  current.name,
-  current.email,
-  current.password_hash,
-  userRole
-);
+      db.prepare(`
+        INSERT INTO users (
+          id,
+          name,
+          email,
+          password_hash,
+          role
+        )
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        userId,
+        name,
+        email,
+        passwordHashValue,
+        userRole
+      );
 
       db.prepare(`
-        DELETE FROM pending_registrations WHERE email = ?
-      `).run(email);
-
-      return userId;;
+        INSERT INTO sessions (
+          token_hash,
+          user_id,
+          expires_at
+        )
+        VALUES (?, ?, ?)
+      `).run(
+        hashToken(token),
+        userId,
+        expiresAt
+      );
     });
 
-    const userId = createAccount();
+    createAccount();
+
+    setSessionCookie(res, token, req);
 
     const user = db.prepare(`
-      SELECT * FROM users WHERE id = ?
+      SELECT id, name, email, role, created_at, is_blocked
+      FROM users
+      WHERE id = ?
     `).get(userId);
 
-    issueSession(user, res, req);
-
-    return res.json({
+    return res.status(201).json({
       success: true,
       user: publicUser(user)
     });
 
   } catch (error) {
-    console.error("Email verification error:", error.message);
+    console.error("Registration error:", error.message);
 
-    if (error.message === "CODE_EXPIRED") {
-      return res.status(400).json({
-        error: "Код истёк или заявка больше недействительна. Начни регистрацию заново."
-      });
-    }
-
-    if (error.message === "ACCOUNT_EXISTS") {
+    if (
+      error.code === "SQLITE_CONSTRAINT_UNIQUE" ||
+      error.code === "SQLITE_CONSTRAINT_PRIMARYKEY"
+    ) {
       return res.status(409).json({
         error: "Аккаунт уже существует. Используй вход."
       });
     }
 
     return res.status(500).json({
-      error: "Не удалось подтвердить email и создать аккаунт."
+      error: "Не удалось создать аккаунт. Попробуй позже."
     });
   }
 });
-
-
 
 // ==========================================
 // ВХОД
@@ -897,10 +671,12 @@ app.post("/api/auth/login", (req, res) => {
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
       db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
         .run(user.id);
+
       user.role = "OWNER";
     }
 
     issueSession(user, res, req);
+
     res.setHeader("Cache-Control", "no-store");
 
     res.json({
@@ -935,7 +711,9 @@ app.get("/api/auth/me", auth, (req, res) => {
     });
   }
 
-  res.json({ user: publicUser(user) });
+  res.json({
+    user: publicUser(user)
+  });
 });
 
 // ==========================================
@@ -951,7 +729,10 @@ app.post("/api/auth/logout", (req, res) => {
   }
 
   clearSessionCookie(res, req);
-  res.json({ success: true });
+
+  res.json({
+    success: true
+  });
 });
 
 db.prepare("DELETE FROM sessions WHERE expires_at <= ?")
@@ -1062,7 +843,6 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
 // УПРАВЛЕНИЕ GEMINI API-КЛЮЧАМИ
 // ==========================================
 
-// Получить список ключей. Сами секреты никогда не возвращаются.
 app.get("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
   res.setHeader("Cache-Control", "no-store");
 
@@ -1092,7 +872,6 @@ app.get("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
   }
 });
 
-// Добавить новый Gemini API-ключ.
 app.post("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
   try {
     const apiKey = typeof req.body.apiKey === "string"
@@ -1114,7 +893,6 @@ app.post("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
     });
 
   } catch (error) {
-    // Не записываем тело запроса и сам API-ключ в логи.
     console.error("Gemini key insert error:", error.message);
 
     res.status(400).json({
@@ -1123,7 +901,6 @@ app.post("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
   }
 });
 
-// Включить или отключить ключ.
 app.patch(
   "/api/admin/gemini-keys/:id/toggle",
   auth,
@@ -1153,7 +930,6 @@ app.patch(
   }
 );
 
-// Удалить ключ.
 app.delete(
   "/api/admin/gemini-keys/:id",
   auth,
@@ -1208,6 +984,7 @@ function reserveCounter(userId, counter, amount, limit) {
   if (current[counter] + amount > limit) return false;
 
   const allowedColumns = ["messages", "images", "files"];
+
   if (!allowedColumns.includes(counter)) return false;
 
   db.prepare(`
@@ -1279,9 +1056,9 @@ app.get("/api/status", (req, res) => {
     geminiKeysActive: activeKeys,
     uploadsEnabled: true,
     imageGenerationEnabled: Boolean(
-  process.env.CLOUDFLARE_ACCOUNT_ID &&
-  process.env.CLOUDFLARE_API_TOKEN
-)
+      process.env.CLOUDFLARE_ACCOUNT_ID &&
+      process.env.CLOUDFLARE_API_TOKEN
+    )
   });
 });
 
@@ -1449,7 +1226,9 @@ app.delete("/api/memory/:id", auth, (req, res) => {
     WHERE id = ? AND user_id = ?
   `).run(req.params.id, req.user.id);
 
-  res.json({ success: true });
+  res.json({
+    success: true
+  });
 });
 
 // ==========================================
@@ -1479,7 +1258,10 @@ function convertMessageContent(content) {
 
   for (const item of content) {
     if (item.type === "text") {
-      parts.push({ text: String(item.text || "") });
+      parts.push({
+        text: String(item.text || "")
+      });
+
       continue;
     }
 
@@ -1535,7 +1317,9 @@ function convertMessagesToGemini(messages) {
 
   if (systemMessages.length) {
     result.systemInstruction = {
-      parts: [{ text: systemMessages.join("\n\n") }]
+      parts: [{
+        text: systemMessages.join("\n\n")
+      }]
     };
   }
 
@@ -1585,7 +1369,6 @@ async function askAI(messages) {
       });
 
       const data = await readGeminiResponse(response);
-
       const parts = data?.candidates?.[0]?.content?.parts || [];
 
       const answer = parts
@@ -1701,7 +1484,10 @@ app.post(
           `).run(userId, conversationId);
         } else {
           if (messageReserved) releaseMessage(userId);
-          if (filesReserved) releaseCounter(userId, "files", files.length);
+
+          if (filesReserved) {
+            releaseCounter(userId, "files", files.length);
+          }
 
           return res.status(403).json({
             error: "Нет доступа к этому чату."
@@ -1847,6 +1633,7 @@ app.post(
       console.error("Pinsk AI chat error:", error.message);
 
       if (messageReserved) releaseMessage(userId);
+
       if (filesReserved) {
         releaseCounter(userId, "files", files.length);
       }
@@ -1867,9 +1654,8 @@ app.post(
 );
 
 // ==========================================
-// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ GEMINI
+// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ CLOUDFLARE
 // ==========================================
-
 
 async function generateCloudflareImage(prompt) {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -1904,6 +1690,7 @@ async function generateCloudflareImage(prompt) {
 
     try {
       const errorData = JSON.parse(buffer.toString("utf8"));
+
       message =
         errorData.errors?.map(item => item.message).join("; ") ||
         errorData.error ||
@@ -1920,6 +1707,7 @@ async function generateCloudflareImage(prompt) {
 
   if (contentType.includes("application/json")) {
     mimeType = "image/jpeg";
+
     const data = JSON.parse(buffer.toString("utf8"));
 
     imageData =
@@ -1981,11 +1769,11 @@ async function imageGenerationHandler(req, res) {
       });
     }
 
-if (prompt.length > 2048) {
-  return res.status(400).json({
-    error: "Описание не должно превышать 2048 символов."
-  });
-}
+    if (prompt.length > 2048) {
+      return res.status(400).json({
+        error: "Описание не должно превышать 2048 символов."
+      });
+    }
 
     const limits = limitsFor(req.user);
 
@@ -2052,7 +1840,6 @@ app.post(
   auth,
   imageGenerationHandler
 );
-
 
 // ==========================================
 // АНАЛИЗ ДАННЫХ
@@ -2173,6 +1960,7 @@ app.listen(PORT, () => {
   console.log("Gemini API-ключей:", keys.length);
   console.log("Активных Gemini API-ключей:", activeKeys);
   console.log("Автоматическая ротация: включена");
+  console.log("Регистрация: без подтверждения email");
   console.log("FREE: 100 сообщений в день");
   console.log("FREE: 5 изображений и 5 файлов в день");
   console.log("PRO: безлимит");
