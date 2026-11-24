@@ -12,6 +12,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
+const nodemailer = require("nodemailer");
 
 const {
   initGeminiKeysTable,
@@ -23,6 +24,48 @@ const {
 } = require("./key-manager");
 
 dotenv.config();
+// ==========================================
+// EMAIL: BREVO SMTP
+// ==========================================
+
+const mailer = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || "smtp-relay.brevo.com",
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: Number(process.env.SMTP_PORT || 587) === 465,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+});
+
+async function sendVerificationEmail(email, name, code) {
+  if (
+    !process.env.SMTP_USER ||
+    !process.env.SMTP_PASS ||
+    !process.env.SMTP_FROM
+  ) {
+    throw new Error("Почтовый сервер не настроен.");
+  }
+
+  await mailer.sendMail({
+    from: `"Pinsk AI" <${process.env.SMTP_FROM}>`,
+    to: email,
+    subject: "Подтверждение регистрации Pinsk AI",
+    text:
+      `Здравствуйте, ${name}!\n\n` +
+      `Ваш код подтверждения: ${code}\n\n` +
+      `Код действует 10 минут.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;padding:25px">
+        <h2>Pinsk AI</h2>
+        <p>Здравствуйте, ${String(name).replace(/[&<>"']/g, "")}!</p>
+        <p>Ваш код подтверждения:</p>
+        <h1 style="letter-spacing:8px">${code}</h1>
+        <p>Код действует 10 минут.</p>
+      </div>
+    `
+  });
+}
 
 const app = express();
 
@@ -309,6 +352,18 @@ db.exec(`
     files INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, usage_date)
   );
+
+  CREATE TABLE IF NOT EXISTS pending_registrations (
+    email TEXT PRIMARY KEY COLLATE NOCASE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    code_salt TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_sent_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 function hasColumn(table, column) {
@@ -378,7 +433,21 @@ function verifyPassword(password, stored) {
   return actual.length === expected.length &&
     crypto.timingSafeEqual(actual, expected);
 }
+// ==========================================
+// КОД ПОДТВЕРЖДЕНИЯ EMAIL
+// ==========================================
 
+function generateVerificationCode() {
+  return crypto.randomInt(0, 1000000)
+    .toString()
+    .padStart(6, "0");
+}
+
+function hashVerificationCode(code, salt) {
+  return crypto.createHash("sha256")
+    .update(`${salt}:${code}`)
+    .digest("hex");
+}
 function cookieToken(req) {
   const cookies = (req.headers.cookie || "").split(";");
 
@@ -534,7 +603,7 @@ function issueSession(user, res, req) {
 // РЕГИСТРАЦИЯ
 // ==========================================
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
     const name = String(req.body.name || "").trim();
     const email = String(req.body.email || "").trim().toLowerCase();
@@ -568,34 +637,237 @@ app.post("/api/auth/register", (req, res) => {
       });
     }
 
-    const id = crypto.randomUUID();
-    const role = email === OWNER_EMAIL ? "OWNER" : "FREE";
+    const code = generateVerificationCode();
+    const salt = crypto.randomBytes(16).toString("hex");
+    const codeHash = hashVerificationCode(code, salt);
+    const passwordHashValue = makePasswordHash(password);
+    const now = Date.now();
+
+    await sendVerificationEmail(email, name, code);
 
     db.prepare(`
-      INSERT INTO users (id, name, email, password_hash, role)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, name, email, makePasswordHash(password), role);
-
-    const user = db.prepare(`
-      SELECT id, name, email, role, created_at
-      FROM users WHERE id = ?
-    `).get(id);
-
-    issueSession(user, res, req);
+      INSERT INTO pending_registrations (
+        email,
+        name,
+        password_hash,
+        code_hash,
+        code_salt,
+        expires_at,
+        last_sent_at,
+        attempts
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(email) DO UPDATE SET
+        name = excluded.name,
+        password_hash = excluded.password_hash,
+        code_hash = excluded.code_hash,
+        code_salt = excluded.code_salt,
+        expires_at = excluded.expires_at,
+        last_sent_at = excluded.last_sent_at,
+        attempts = 0
+    `).run(
+      email,
+      name,
+      passwordHashValue,
+      codeHash,
+      salt,
+      now + 10 * 60 * 1000,
+      now
+    );
 
     res.json({
       success: true,
-      user: publicUser(user)
+      verificationRequired: true,
+      message: "Код подтверждения отправлен на email."
     });
 
   } catch (error) {
     console.error("Registration error:", error.message);
 
     res.status(500).json({
-      error: "Не удалось создать аккаунт."
+      error: error.message === "Почтовый сервер не настроен."
+        ? error.message
+        : "Не удалось отправить код подтверждения. Проверь настройки почты и попробуй снова."
     });
   }
 });
+
+app.post("/api/auth/verify-email", (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const code = String(req.body.code || "").trim();
+
+    res.set("Cache-Control", "no-store");
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        error: "Введи правильный email."
+      });
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({
+        error: "Введи шестизначный код."
+      });
+    }
+
+    const pending = db.prepare(`
+      SELECT *
+      FROM pending_registrations
+      WHERE email = ?
+    `).get(email);
+
+    if (!pending) {
+      return res.status(400).json({
+        error: "Заявка на регистрацию не найдена. Начни регистрацию заново."
+      });
+    }
+
+    if (Date.now() > pending.expires_at) {
+      db.prepare(`
+        DELETE FROM pending_registrations WHERE email = ?
+      `).run(email);
+
+      return res.status(400).json({
+        error: "Срок действия кода истёк. Начни регистрацию заново."
+      });
+    }
+
+    if (pending.attempts >= 5) {
+      db.prepare(`
+        DELETE FROM pending_registrations WHERE email = ?
+      `).run(email);
+
+      return res.status(429).json({
+        error: "Превышено количество попыток. Начни регистрацию заново."
+      });
+    }
+
+    const actualHash = Buffer.from(
+      hashVerificationCode(code, pending.code_salt),
+      "hex"
+    );
+
+    const expectedHash = Buffer.from(pending.code_hash, "hex");
+
+    const isValid =
+      actualHash.length === expectedHash.length &&
+      crypto.timingSafeEqual(actualHash, expectedHash);
+
+    if (!isValid) {
+      const updateResult = db.prepare(`
+        UPDATE pending_registrations
+        SET attempts = attempts + 1
+        WHERE email = ? AND attempts < 5
+      `).run(email);
+
+      if (updateResult.changes === 0) {
+        return res.status(429).json({
+          error: "Превышено количество попыток. Начни регистрацию заново."
+        });
+      }
+
+      const updated = db.prepare(`
+        SELECT attempts
+        FROM pending_registrations
+        WHERE email = ?
+      `).get(email);
+
+      if (updated && updated.attempts >= 5) {
+        db.prepare(`
+          DELETE FROM pending_registrations WHERE email = ?
+        `).run(email);
+
+        return res.status(429).json({
+          error: "Превышено количество попыток. Начни регистрацию заново."
+        });
+      }
+
+      return res.status(400).json({
+        error: "Неверный код подтверждения."
+      });
+    }
+
+    const createAccount = db.transaction(() => {
+      const current = db.prepare(`
+        SELECT *
+        FROM pending_registrations
+        WHERE email = ?
+      `).get(email);
+
+      if (!current || Date.now() > current.expires_at || current.attempts >= 5) {
+        throw new Error("CODE_EXPIRED");
+      }
+
+      const existing = db.prepare(`
+        SELECT id FROM users WHERE email = ?
+      `).get(email);
+
+      if (existing) {
+        db.prepare(`
+          DELETE FROM pending_registrations WHERE email = ?
+        `).run(email);
+
+        throw new Error("ACCOUNT_EXISTS");
+      }
+
+      const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
+
+     const userId = crypto.randomUUID();
+
+db.prepare(`
+  INSERT INTO users (id, name, email, password_hash, role)
+  VALUES (?, ?, ?, ?, ?)
+`).run(
+  userId,
+  current.name,
+  current.email,
+  current.password_hash,
+  userRole
+);
+
+      db.prepare(`
+        DELETE FROM pending_registrations WHERE email = ?
+      `).run(email);
+
+      return userId;;
+    });
+
+    const userId = createAccount();
+
+    const user = db.prepare(`
+      SELECT * FROM users WHERE id = ?
+    `).get(userId);
+
+    issueSession(user, res, req);
+
+    return res.json({
+      success: true,
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Email verification error:", error.message);
+
+    if (error.message === "CODE_EXPIRED") {
+      return res.status(400).json({
+        error: "Код истёк или заявка больше недействительна. Начни регистрацию заново."
+      });
+    }
+
+    if (error.message === "ACCOUNT_EXISTS") {
+      return res.status(409).json({
+        error: "Аккаунт уже существует. Используй вход."
+      });
+    }
+
+    return res.status(500).json({
+      error: "Не удалось подтвердить email и создать аккаунт."
+    });
+  }
+});
+
+
 
 // ==========================================
 // ВХОД
