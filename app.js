@@ -361,10 +361,162 @@ function closeModal() {
   $("modalBackdrop")?.classList.remove("active");
   $("modal")?.classList.remove("active");
 }
-
 /* =========================================
    АВТОРИЗАЦИЯ
    ========================================= */
+
+function showEmailVerification(email) {
+  const userEmail = String(email || "").trim().toLowerCase();
+
+  showModal(`
+    <div class="auth-box">
+      <h2>Подтверждение email</h2>
+      <p>
+        Мы отправили письмо с кодом подтверждения на:
+      </p>
+
+      <p style="color:#b5a8ff;font-weight:600;overflow-wrap:anywhere;">
+        ${escapeHTML(userEmail)}
+      </p>
+
+      <label>Шестизначный код</label>
+      <input
+        id="authVerificationCode"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength="6"
+        placeholder="000000"
+      >
+
+      <button class="primary-button" id="verifyEmailButton">
+        Подтвердить email
+      </button>
+
+      <p id="verificationError" class="error-text"></p>
+      <p id="verificationNotice"></p>
+
+      <button
+        class="secondary-button"
+        id="resendVerificationButton"
+        style="width:100%;margin-top:8px;"
+      >
+        Отправить код повторно
+      </button>
+
+      <p class="auth-switch">
+        <a href="#" id="backToLogin">Вернуться ко входу</a>
+      </p>
+    </div>
+  `);
+
+  const codeInput = $("authVerificationCode");
+  const verifyButton = $("verifyEmailButton");
+  const resendButton = $("resendVerificationButton");
+  const errorElement = $("verificationError");
+  const noticeElement = $("verificationNotice");
+
+  codeInput?.focus();
+
+  codeInput?.addEventListener("input", () => {
+    codeInput.value = codeInput.value
+      .replace(/\D/g, "")
+      .slice(0, 6);
+  });
+
+  async function verifyCode() {
+    if (!codeInput || !verifyButton || verifyButton.disabled) return;
+
+    const code = codeInput.value.trim();
+
+    errorElement.textContent = "";
+    noticeElement.textContent = "";
+
+    if (!/^\d{6}$/.test(code)) {
+      errorElement.textContent = "Введи шестизначный код из письма.";
+      return;
+    }
+
+    verifyButton.disabled = true;
+    verifyButton.textContent = "Проверка...";
+
+    try {
+      const data = await api("/api/auth/verify-email", {
+        method: "POST",
+        body: JSON.stringify({
+          email: userEmail,
+          code
+        })
+      });
+
+      if (!data.user) {
+        throw new Error("Сервер не вернул пользователя.");
+      }
+
+      currentUser = data.user;
+
+      closeModal();
+      updateProfile();
+
+      await loadUsage();
+      await loadHistory();
+
+      renderPage("chat");
+
+      toast("Email подтверждён! Добро пожаловать в Pinsk AI!");
+
+    } catch (error) {
+      errorElement.textContent = error.message;
+
+      verifyButton.disabled = false;
+      verifyButton.textContent = "Подтвердить email";
+    }
+  }
+
+  async function resendCode() {
+    if (!resendButton || resendButton.disabled) return;
+
+    errorElement.textContent = "";
+    noticeElement.textContent = "";
+
+    resendButton.disabled = true;
+    resendButton.textContent = "Отправка...";
+
+    try {
+      const data = await api("/api/auth/resend-code", {
+        method: "POST",
+        body: JSON.stringify({
+          email: userEmail
+        })
+      });
+
+      noticeElement.textContent =
+        data.message || "Новый код отправлен на твою почту.";
+
+    } catch (error) {
+      errorElement.textContent = error.message;
+
+    } finally {
+      resendButton.disabled = false;
+      resendButton.textContent = "Отправить код повторно";
+    }
+  }
+
+  verifyButton?.addEventListener("click", verifyCode);
+  resendButton?.addEventListener("click", resendCode);
+
+  codeInput?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      verifyCode();
+    }
+  });
+
+  $("backToLogin")?.addEventListener("click", event => {
+    event.preventDefault();
+    showAuth("login");
+  });
+}
+
 
 function showAuth(mode = "login") {
   const register = mode === "register";
@@ -407,8 +559,11 @@ function showAuth(mode = "login") {
     const name = $("authName")?.value.trim() || "";
     const email = $("authEmail")?.value.trim() || "";
     const password = $("authPassword")?.value || "";
+
     const error = $("authError");
     const button = $("authSubmit");
+
+    if (button?.disabled) return;
 
     if (!email || !password || (register && !name)) {
       error.textContent = "Заполни все поля.";
@@ -423,16 +578,30 @@ function showAuth(mode = "login") {
     button.disabled = true;
     button.textContent = "Подождите...";
 
+    error.textContent = "";
+
     try {
       const data = await api(
         register ? "/api/auth/register" : "/api/auth/login",
         {
           method: "POST",
-          body: JSON.stringify({ name, email, password })
+          body: JSON.stringify({
+            name,
+            email,
+            password
+          })
         }
       );
 
-      if (!data.user) throw new Error("Сервер не вернул пользователя.");
+      // Регистрация требует подтверждения email.
+      if (register && data.verificationRequired) {
+        showEmailVerification(data.email || email);
+        return;
+      }
+
+      if (!data.user) {
+        throw new Error("Сервер не вернул пользователя.");
+      }
 
       currentUser = data.user;
 
@@ -452,8 +621,11 @@ function showAuth(mode = "login") {
 
     } catch (err) {
       error.textContent = err.message;
+
       button.disabled = false;
-      button.textContent = register ? "Зарегистрироваться" : "Войти";
+      button.textContent = register
+        ? "Зарегистрироваться"
+        : "Войти";
     }
   };
 
@@ -465,6 +637,7 @@ function showAuth(mode = "login") {
     });
   });
 }
+
 
 async function checkAuth() {
   try {
@@ -495,9 +668,13 @@ async function checkAuth() {
   }
 }
 
+
 async function logout() {
   try {
-    await api("/api/auth/logout", { method: "POST" });
+    await api("/api/auth/logout", {
+      method: "POST"
+    });
+
   } catch (error) {
     console.error(error);
   }
@@ -511,6 +688,7 @@ async function logout() {
   updateProfile();
   showAuth("login");
 }
+
 
 /* =========================================
    ПРОФИЛЬ И OWNER
