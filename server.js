@@ -1,4 +1,3 @@
-
 "use strict";
 
 const express = require("express");
@@ -28,7 +27,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
 
@@ -501,7 +500,6 @@ function publicUser(user) {
     plan: user.role
   };
 }
-
 // ==========================================
 // АВТОРИЗАЦИЯ
 // ==========================================
@@ -865,7 +863,6 @@ app.post("/api/auth/verify-email", (req, res) => {
     });
   }
 });
-
 // ==========================================
 // ПОВТОРНАЯ ОТПРАВКА КОДА
 // ==========================================
@@ -1144,7 +1141,6 @@ app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
     user: updated
   });
 });
-
 // ==========================================
 // УПРАВЛЕНИЕ GEMINI API-КЛЮЧАМИ
 // ==========================================
@@ -1362,8 +1358,7 @@ app.get("/api/status", (req, res) => {
     geminiKeysActive: activeKeys,
     uploadsEnabled: true,
     imageGenerationEnabled: Boolean(
-      process.env.CLOUDFLARE_ACCOUNT_ID &&
-      process.env.CLOUDFLARE_API_TOKEN
+      process.env.OPENAI_IMAGE_API_KEY
     )
   });
 });
@@ -1430,7 +1425,6 @@ app.get("/api/usage", auth, (req, res) => {
     }
   });
 });
-
 // ==========================================
 // ПЛАГИНЫ
 // ==========================================
@@ -1631,7 +1625,6 @@ function convertMessagesToGemini(messages) {
 
   return result;
 }
-
 async function readGeminiResponse(response) {
   let data;
 
@@ -1958,95 +1951,60 @@ app.post(
     }
   }
 );
-
 // ==========================================
-// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ CLOUDFLARE
+// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ OPENAI
 // ==========================================
 
-async function generateCloudflareImage(prompt) {
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+async function generateOpenAIImage(prompt) {
+  const apiKey = process.env.OPENAI_IMAGE_API_KEY;
 
-  if (!accountId || !apiToken) {
-    throw new Error("Cloudflare API не настроен.");
+  if (!apiKey) {
+    throw new Error("OPENAI_IMAGE_API_KEY не настроен.");
   }
 
-  const endpoint =
-    `https://api.cloudflare.com/client/v4/accounts/` +
-    `${encodeURIComponent(accountId)}/ai/run/${IMAGE_MODEL}`;
+  const response = await fetch(
+    "https://api.openai.com/v1/images/generations",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: IMAGE_MODEL,
+        prompt: String(prompt).slice(0, 2048),
+        n: 1,
+        size: "1024x1024",
+        quality: "high",
+        output_format: "png"
+      }),
+      signal: AbortSignal.timeout(180000)
+    }
+  );
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      prompt: String(prompt).slice(0, 2048),
-      steps: 4
-    }),
-    signal: AbortSignal.timeout(180000)
-  });
-
-  const contentType = response.headers.get("content-type") || "";
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    let message = `Cloudflare HTTP ${response.status}`;
+    const error = new Error(
+      data?.error?.message ||
+      `OpenAI Images API вернул HTTP ${response.status}`
+    );
 
-    try {
-      const errorData = JSON.parse(buffer.toString("utf8"));
-
-      message =
-        errorData.errors?.map(item => item.message).join("; ") ||
-        errorData.error ||
-        message;
-    } catch {}
-
-    const error = new Error(message);
     error.status = response.status;
     throw error;
   }
 
-  let imageData;
-  let mimeType = "image/png";
+  const imageData = data?.data?.[0]?.b64_json;
 
-  if (contentType.includes("application/json")) {
-    mimeType = "image/jpeg";
-
-    const data = JSON.parse(buffer.toString("utf8"));
-
-    imageData =
-      data.result?.image ||
-      data.result?.data ||
-      (typeof data.result === "string" ? data.result : null) ||
-      data.image;
-
-    if (typeof imageData !== "string") {
-      throw new Error("Cloudflare не вернул изображение.");
-    }
-
-    imageData = imageData.replace(
-      /^data:image\/[^;]+;base64,/,
-      ""
-    );
-
-  } else if (contentType.startsWith("image/")) {
-    mimeType = contentType.split(";")[0];
-    imageData = buffer.toString("base64");
-
-  } else {
-    throw new Error(
-      "Cloudflare вернул неподдерживаемый формат изображения."
-    );
-  }
-
-  if (!imageData || imageData.length < 100) {
-    throw new Error("Получено пустое изображение.");
+  if (
+    typeof imageData !== "string" ||
+    imageData.length < 100
+  ) {
+    throw new Error("OpenAI не вернул данные изображения.");
   }
 
   return {
-    mimeType,
+    mimeType: "image/png",
     data: imageData,
     text: ""
   };
@@ -2056,12 +2014,9 @@ async function imageGenerationHandler(req, res) {
   let reserved = false;
 
   try {
-    if (
-      !process.env.CLOUDFLARE_ACCOUNT_ID ||
-      !process.env.CLOUDFLARE_API_TOKEN
-    ) {
+    if (!process.env.OPENAI_IMAGE_API_KEY) {
       return res.status(503).json({
-        error: "Генерация изображений временно недоступна."
+        error: "Генерация изображений временно недоступна. Не настроен OpenAI Image API."
       });
     }
 
@@ -2101,7 +2056,7 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateCloudflareImage(prompt);
+    const result = await generateOpenAIImage(prompt);
 
     res.json({
       success: true,
@@ -2114,7 +2069,7 @@ async function imageGenerationHandler(req, res) {
 
   } catch (error) {
     console.error(
-      "Cloudflare image generation error:",
+      "OpenAI image generation error:",
       error.message
     );
 
@@ -2129,7 +2084,7 @@ async function imageGenerationHandler(req, res) {
 
     res.status(status).json({
       error: status === 503
-        ? "Cloudflare временно недоступен или исчерпан лимит генерации. Попробуй позже."
+        ? "OpenAI Image API временно недоступен, превышена квота или неверно настроен API-ключ. Попробуй позже."
         : "Не удалось создать изображение. Попробуй изменить описание."
     });
   }
@@ -2213,13 +2168,37 @@ app.post("/api/analysis", auth, async (req, res) => {
 // САЙТ
 // ==========================================
 
+app.use((req, res, next) => {
+  const blockedFiles =
+    /(^|\/)(server\.js|key-manager\.js|pinsk\.db(?:-(wal|shm|journal))?|\.env(?:\.[^/]*)?|package(?:-lock)?\.json|yarn\.lock|pnpm-lock\.yaml)(\/|$)/i;
+
+  const blockedDirs =
+    /(^|\/)(node_modules|\.git|\.github)(\/|$)/i;
+
+  let pathname;
+
+  try {
+    pathname = decodeURIComponent(req.path).replace(/\\/g, "/");
+  } catch {
+    return res.sendStatus(400);
+  }
+
+  if (blockedFiles.test(pathname) || blockedDirs.test(pathname)) {
+    return res.sendStatus(404);
+  }
+
+  next();
+});
+
 app.use(express.static(__dirname, {
-  index: "index.html"
+  index: "index.html",
+  dotfiles: "deny"
 }));
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
+
 
 // ==========================================
 // ОБРАБОТКА ОШИБОК
