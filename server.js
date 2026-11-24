@@ -1,3 +1,4 @@
+
 "use strict";
 
 const express = require("express");
@@ -11,6 +12,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
+const nodemailer = require("nodemailer");
 
 const {
   initGeminiKeysTable,
@@ -29,6 +31,60 @@ const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
+
+// ==========================================
+// GMAIL SMTP
+// ==========================================
+
+function getMailTransporter() {
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = String(process.env.SMTP_PASS || "").replace(/\s/g, "");
+
+  if (!user || !pass) {
+    throw new Error("SMTP_USER или SMTP_PASS не настроены.");
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: {
+      user,
+      pass
+    },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000
+  });
+}
+
+async function sendVerificationEmail(email, code) {
+  const transporter = getMailTransporter();
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+
+  await transporter.sendMail({
+    from: `"Pinsk AI" <${from}>`,
+    to: email,
+    subject: "Код подтверждения Pinsk AI",
+    text:
+      `Твой код подтверждения Pinsk AI: ${code}\n\n` +
+      "Код действует 10 минут.\n" +
+      "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
+        <h2 style="text-align:center">Pinsk AI</h2>
+        <p>Для подтверждения электронной почты введи этот код:</p>
+        <div style="font-size:34px;font-weight:bold;letter-spacing:9px;text-align:center;padding:22px;background:#f2f4f8;border-radius:12px">
+          ${code}
+        </div>
+        <p>Код действует <b>10 минут</b>.</p>
+        <p style="color:#777;font-size:13px">Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.</p>
+      </div>
+    `
+  });
+}
 
 const LEGACY_API_KEY = process.env.OPENAI_API_KEY;
 
@@ -305,6 +361,19 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS email_verifications (
+    email TEXT PRIMARY KEY COLLATE NOCASE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_sent_at INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 function hasColumn(table, column) {
   return db.prepare(`PRAGMA table_info(${table})`)
     .all()
@@ -529,10 +598,10 @@ function issueSession(user, res, req) {
 }
 
 // ==========================================
-// РЕГИСТРАЦИЯ БЕЗ EMAIL-ПОДТВЕРЖДЕНИЯ
+// РЕГИСТРАЦИЯ С EMAIL-ПОДТВЕРЖДЕНИЕМ
 // ==========================================
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
 
@@ -571,14 +640,173 @@ app.post("/api/auth/register", (req, res) => {
       });
     }
 
+    const now = Date.now();
+
+    const pending = db.prepare(`
+      SELECT last_sent_at
+      FROM email_verifications
+      WHERE email = ?
+    `).get(email);
+
+    if (pending && now - pending.last_sent_at < 60000) {
+      return res.status(429).json({
+        error: "Подожди минуту перед повторной отправкой кода."
+      });
+    }
+
+    const code = String(
+      crypto.randomInt(100000, 1000000)
+    );
+
+    const codeHash = crypto.createHash("sha256")
+      .update(code)
+      .digest("hex");
+
+    const storedPassword = makePasswordHash(password);
+
+    db.prepare(`
+      INSERT INTO email_verifications (
+        email,
+        name,
+        password_hash,
+        code_hash,
+        expires_at,
+        attempts,
+        last_sent_at
+      )
+      VALUES (?, ?, ?, ?, ?, 0, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        name = excluded.name,
+        password_hash = excluded.password_hash,
+        code_hash = excluded.code_hash,
+        expires_at = excluded.expires_at,
+        attempts = 0,
+        last_sent_at = excluded.last_sent_at
+    `).run(
+      email,
+      name,
+      storedPassword,
+      codeHash,
+      now + 10 * 60 * 1000,
+      now
+    );
+
+    try {
+      await sendVerificationEmail(email, code);
+    } catch (mailError) {
+      console.error("Verification email error:", mailError.message);
+
+      db.prepare(`
+        DELETE FROM email_verifications
+        WHERE email = ?
+      `).run(email);
+
+      return res.status(503).json({
+        error: "Не удалось отправить письмо. Проверь настройки Gmail и попробуй позже."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      verificationRequired: true,
+      message: "Код подтверждения отправлен на твою почту."
+    });
+
+  } catch (error) {
+    console.error("Registration error:", error.message);
+
+    return res.status(500).json({
+      error: "Не удалось начать регистрацию. Попробуй позже."
+    });
+  }
+});
+
+// ==========================================
+// ПОДТВЕРЖДЕНИЕ EMAIL
+// ==========================================
+
+app.post("/api/auth/verify-email", (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const code = String(req.body.code || "").trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        error: "Некорректный email."
+      });
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({
+        error: "Введи шестизначный код из письма."
+      });
+    }
+
+    const pending = db.prepare(`
+      SELECT *
+      FROM email_verifications
+      WHERE email = ?
+    `).get(email);
+
+    if (!pending) {
+      return res.status(400).json({
+        error: "Регистрация не найдена. Начни регистрацию заново."
+      });
+    }
+
+    if (pending.expires_at <= Date.now()) {
+      db.prepare(`
+        DELETE FROM email_verifications
+        WHERE email = ?
+      `).run(email);
+
+      return res.status(400).json({
+        error: "Срок действия кода истёк. Зарегистрируйся заново."
+      });
+    }
+
+    if (pending.attempts >= 5) {
+      return res.status(429).json({
+        error: "Слишком много попыток. Запроси новый код."
+      });
+    }
+
+    const submittedHash = crypto.createHash("sha256")
+      .update(code)
+      .digest("hex");
+
+    const actual = Buffer.from(submittedHash, "hex");
+    const expected = Buffer.from(pending.code_hash, "hex");
+
+    const valid = actual.length === expected.length &&
+      crypto.timingSafeEqual(actual, expected);
+
+    if (!valid) {
+      db.prepare(`
+        UPDATE email_verifications
+        SET attempts = attempts + 1
+        WHERE email = ?
+      `).run(email);
+
+      return res.status(400).json({
+        error: "Неверный код подтверждения."
+      });
+    }
+
     const userId = crypto.randomUUID();
-    const passwordHashValue = makePasswordHash(password);
     const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
 
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
-
     const createAccount = db.transaction(() => {
+      const existing = db.prepare(
+        "SELECT id FROM users WHERE email = ?"
+      ).get(email);
+
+      if (existing) {
+        throw new Error("ACCOUNT_ALREADY_EXISTS");
+      }
+
       db.prepare(`
         INSERT INTO users (
           id,
@@ -590,29 +818,29 @@ app.post("/api/auth/register", (req, res) => {
         VALUES (?, ?, ?, ?, ?)
       `).run(
         userId,
-        name,
+        pending.name,
         email,
-        passwordHashValue,
+        pending.password_hash,
         userRole
       );
 
       db.prepare(`
-        INSERT INTO sessions (
-          token_hash,
-          user_id,
-          expires_at
-        )
-        VALUES (?, ?, ?)
-      `).run(
-        hashToken(token),
-        userId,
-        expiresAt
-      );
+        DELETE FROM email_verifications
+        WHERE email = ?
+      `).run(email);
     });
 
-    createAccount();
+    try {
+      createAccount();
+    } catch (error) {
+      if (error.message === "ACCOUNT_ALREADY_EXISTS") {
+        return res.status(409).json({
+          error: "Аккаунт уже существует. Используй вход."
+        });
+      }
 
-    setSessionCookie(res, token, req);
+      throw error;
+    }
 
     const user = db.prepare(`
       SELECT id, name, email, role, created_at, is_blocked
@@ -620,25 +848,101 @@ app.post("/api/auth/register", (req, res) => {
       WHERE id = ?
     `).get(userId);
 
+    issueSession(user, res, req);
+
     return res.status(201).json({
       success: true,
       user: publicUser(user)
     });
 
   } catch (error) {
-    console.error("Registration error:", error.message);
+    console.error("Email verification error:", error.message);
 
-    if (
-      error.code === "SQLITE_CONSTRAINT_UNIQUE" ||
-      error.code === "SQLITE_CONSTRAINT_PRIMARYKEY"
-    ) {
-      return res.status(409).json({
-        error: "Аккаунт уже существует. Используй вход."
+    return res.status(500).json({
+      error: "Не удалось подтвердить почту. Попробуй позже."
+    });
+  }
+});
+
+// ==========================================
+// ПОВТОРНАЯ ОТПРАВКА КОДА
+// ==========================================
+
+app.post("/api/auth/resend-code", async (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        error: "Некорректный email."
       });
     }
 
+    const pending = db.prepare(`
+      SELECT *
+      FROM email_verifications
+      WHERE email = ?
+    `).get(email);
+
+    if (!pending) {
+      return res.json({
+        success: true,
+        message: "Если регистрация ожидает подтверждения, новый код будет отправлен."
+      });
+    }
+
+    const now = Date.now();
+
+    if (now - pending.last_sent_at < 60000) {
+      return res.status(429).json({
+        error: "Подожди минуту перед повторной отправкой."
+      });
+    }
+
+    const code = String(
+      crypto.randomInt(100000, 1000000)
+    );
+
+    const codeHash = crypto.createHash("sha256")
+      .update(code)
+      .digest("hex");
+
+    db.prepare(`
+      UPDATE email_verifications
+      SET code_hash = ?,
+          expires_at = ?,
+          attempts = 0,
+          last_sent_at = ?
+      WHERE email = ?
+    `).run(
+      codeHash,
+      now + 10 * 60 * 1000,
+      now,
+      email
+    );
+
+    try {
+      await sendVerificationEmail(email, code);
+    } catch (mailError) {
+      console.error("Resend email error:", mailError.message);
+
+      return res.status(503).json({
+        error: "Не удалось отправить письмо. Попробуй позже."
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Новый код отправлен на почту."
+    });
+
+  } catch (error) {
+    console.error("Resend code error:", error.message);
+
     return res.status(500).json({
-      error: "Не удалось создать аккаунт. Попробуй позже."
+      error: "Не удалось отправить новый код."
     });
   }
 });
@@ -1960,7 +2264,7 @@ app.listen(PORT, () => {
   console.log("Gemini API-ключей:", keys.length);
   console.log("Активных Gemini API-ключей:", activeKeys);
   console.log("Автоматическая ротация: включена");
-  console.log("Регистрация: без подтверждения email");
+  console.log("Регистрация: с подтверждением email");
   console.log("FREE: 100 сообщений в день");
   console.log("FREE: 5 изображений и 5 файлов в день");
   console.log("PRO: безлимит");
