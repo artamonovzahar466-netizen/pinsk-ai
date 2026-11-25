@@ -27,7 +27,7 @@ dotenv.config();
 const app = express();
 
 const PORT = process.env.PORT || 3000;
-const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
+const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const IMAGE_MODEL = "AI Horde";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
@@ -1497,32 +1497,17 @@ function serializableLimits(limits) {
 // ==========================================
 
 app.get("/api/status", async (req, res) => {
-  try {
-    const keys = await getGeminiKeys();
-    const activeKeys = keys.filter(isKeyActive).length;
-
-    res.json({
-      name: "Pinsk AI",
-      server: "online",
-      database: "postgresql",
-      model: MODEL,
-      imageModel: IMAGE_MODEL,
-      apiKeyConfigured: activeKeys > 0,
-      geminiKeysTotal: keys.length,
-      geminiKeysActive: activeKeys,
-      uploadsEnabled: true,
-      imageGenerationEnabled: true
-    });
-
-  } catch (error) {
-    console.error("Status error:", error.message);
-
-    res.status(503).json({
-      name: "Pinsk AI",
-      server: "degraded",
-      database: "unavailable"
-    });
-  }
+  res.json({
+    name: "Pinsk AI",
+    server: "online",
+    database: "postgresql",
+    model: MODEL,
+    provider: "Anthropic Claude",
+    imageModel: IMAGE_MODEL,
+    apiKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY),
+    uploadsEnabled: true,
+    imageGenerationEnabled: true
+  });
 });
 
 
@@ -1760,10 +1745,10 @@ app.delete("/api/memory/:id", auth, async (req, res) => {
 
 
 // ==========================================
-// GEMINI API
+// CLAUDE API (ANTHROPIC)
 // ==========================================
 
-function makeGeminiSignal(managerSignal) {
+function makeClaudeSignal(managerSignal) {
   const timeoutSignal = AbortSignal.timeout(180000);
 
   if (managerSignal && typeof AbortSignal.any === "function") {
@@ -1773,140 +1758,136 @@ function makeGeminiSignal(managerSignal) {
   return timeoutSignal;
 }
 
-function convertMessageContent(content) {
-  if (typeof content === "string") {
-    return [{ text: content }];
-  }
-
-  if (!Array.isArray(content)) {
-    return [{ text: String(content ?? "") }];
-  }
-
-  const parts = [];
-
-  for (const item of content) {
-    if (item.type === "text") {
-      parts.push({
-        text: String(item.text || "")
-      });
-
-      continue;
-    }
-
-    if (item.type === "image_url") {
-      const url = item.image_url?.url || "";
-
-      const match = url.match(
-        /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/
-      );
-
-      if (match) {
-        parts.push({
-          inlineData: {
-            mimeType: match[1],
-            data: match[2]
-          }
-        });
-      }
-    }
-  }
-
-  return parts;
-}
-
-function convertMessagesToGemini(messages) {
+function convertToClaudeMessages(messages) {
   const systemMessages = [];
-  const contents = [];
+  const result = [];
 
   for (const message of messages) {
     if (message.role === "system") {
       const text = typeof message.content === "string"
         ? message.content
-        : convertMessageContent(message.content)
-          .map(part => part.text || "")
-          .join("\n");
+        : String(message.content || "");
 
       systemMessages.push(text);
       continue;
     }
 
-    const role = message.role === "assistant" ? "model" : "user";
-    const parts = convertMessageContent(message.content);
+    const role = message.role === "assistant"
+      ? "assistant"
+      : "user";
 
-    if (!parts.length) continue;
+    let content;
 
-    contents.push({
+    if (typeof message.content === "string") {
+      content = message.content;
+    } else if (Array.isArray(message.content)) {
+      content = [];
+
+      for (const item of message.content) {
+        if (item.type === "text") {
+          content.push({
+            type: "text",
+            text: String(item.text || "")
+          });
+        }
+
+        if (item.type === "image_url") {
+          const url = item.image_url?.url || "";
+
+          const match = url.match(
+            /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/
+          );
+
+          if (match) {
+            content.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: match[1],
+                data: match[2]
+              }
+            });
+          }
+        }
+      }
+    } else {
+      content = String(message.content ?? "");
+    }
+
+    if (
+      Array.isArray(content) &&
+      content.length === 0
+    ) {
+      continue;
+    }
+
+    result.push({
       role,
-      parts
+      content
     });
   }
 
-  const result = { contents };
-
-  if (systemMessages.length) {
-    result.systemInstruction = {
-      parts: [{
-        text: systemMessages.join("\n\n")
-      }]
-    };
-  }
-
-  return result;
+  return {
+    system: systemMessages.join("\n\n"),
+    messages: result
+  };
 }
 
-async function readGeminiResponse(response) {
-  let data;
+async function askAI(messages) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
 
-  try {
-    data = await response.json();
-  } catch {
-    data = {};
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY не настроен в Render.");
   }
+
+  const converted = convertToClaudeMessages(messages);
+
+  const response = await fetch(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 4096,
+        system: converted.system,
+        messages: converted.messages
+      }),
+      signal: makeClaudeSignal()
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     const error = new Error(
       data?.error?.message ||
-      `Gemini API вернул HTTP ${response.status}`
+      `Claude API вернул HTTP ${response.status}`
     );
 
     error.status = response.status;
+
+    console.error(
+      "Claude API error:",
+      response.status,
+      data?.error?.type || "",
+      error.message
+    );
+
     throw error;
   }
 
-  return data;
-}
+  const answer = (data.content || [])
+    .filter(item => item.type === "text")
+    .map(item => item.text || "")
+    .filter(Boolean)
+    .join("\n");
 
-async function askAI(messages) {
-  const requestBody = convertMessagesToGemini(messages);
-
-  return executeWithKeyRotation(
-    pool,
-    async (apiKey, { signal }) => {
-      const endpoint =
-        `https://generativelanguage.googleapis.com/v1beta/models/` +
-        `${encodeURIComponent(MODEL)}:generateContent`;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify(requestBody),
-        signal: makeGeminiSignal(signal)
-      });
-
-      const data = await readGeminiResponse(response);
-      const parts = data?.candidates?.[0]?.content?.parts || [];
-
-      const answer = parts
-        .map(part => part.text || "")
-        .filter(Boolean)
-        .join("\n");
-
-      return answer || "Модель не вернула текстовый ответ.";
-    }
-  );
+  return answer || "Claude не вернул текстовый ответ.";
 }
 
 
@@ -1927,11 +1908,6 @@ app.post(
     const files = req.files || [];
 
     try {
-      if (!(await hasActiveGeminiKeys())) {
-        return res.status(503).json({
-          error: "Нет активных Gemini API-ключей. Обратись к владельцу Pinsk."
-        });
-      }
 
       const message = String(req.body.message || "").trim();
 
@@ -2188,15 +2164,15 @@ app.post(
           .catch(() => {});
       }
 
-      const status = error instanceof multer.MulterError
-        ? 400
-        : (error.status === 429 ? 503 : 500);
+     const status = error instanceof multer.MulterError
+  ? 400
+  : ([429, 529].includes(error.status) ? 503 : 500);
 
       res.status(status).json({
         error: error instanceof multer.MulterError
           ? "Ошибка загрузки файла: " + error.message
           : status === 503
-            ? "Сейчас все доступные API-ключи заняты или исчерпали квоту. Попробуй немного позже."
+            ? "Claude API временно перегружен. Попробуй немного позже."
             : "Ошибка ИИ-сервера. Проверь настройки модели и API."
       });
     }
@@ -2427,17 +2403,8 @@ async function imageGenerationHandler(req, res) {
           limit: limits.images
         });
       }
-    }
-
-    let imagePrompt = prompt;
-
-    if (await hasActiveGeminiKeys()) {
-      imagePrompt = await translateImagePrompt(prompt);
-    } else if (/[А-Яа-яЁё]/.test(prompt)) {
-      throw new Error(
-        "Для перевода русского описания нужны активные Gemini API-ключи."
-      );
-    }
+    
+     const imagePrompt = await translateImagePrompt(prompt);
 
     const result = await generateHordeImage(imagePrompt);
 
@@ -2489,11 +2456,7 @@ app.post(
 
 app.post("/api/analysis", auth, async (req, res) => {
   try {
-    if (!(await hasActiveGeminiKeys())) {
-      return res.status(503).json({
-        error: "Нет активных Gemini API-ключей."
-      });
-    }
+
 
     const content = String(req.body.content || "").trim();
 
@@ -2537,11 +2500,13 @@ app.post("/api/analysis", auth, async (req, res) => {
   } catch (error) {
     console.error("Data analysis error:", error.message);
 
-    res.status(error.status === 429 ? 503 : 500).json({
-      error: error.status === 429
-        ? "Сейчас все доступные API-ключи заняты или исчерпали квоту."
-        : "Не удалось выполнить анализ данных."
-    });
+const status = [429, 529].includes(error.status) ? 503 : 500;
+
+res.status(status).json({
+  error: status === 503
+    ? "Claude API временно перегружен. Попробуй позже."
+    : "Не удалось выполнить анализ данных."
+});
   }
 });
 
