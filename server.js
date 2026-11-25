@@ -1950,6 +1950,37 @@ app.post(
   }
 );
 
+async function translateImagePrompt(prompt) {
+  const answer = await askAI([
+    {
+      role: "system",
+      content:
+        "You are a professional image prompt translator. " +
+        "Translate the user's image description into clear, detailed English " +
+        "suitable for an AI image generation model. " +
+        "Preserve the exact meaning, objects, actions, style and details. " +
+        "Do not add new objects or change the request. " +
+        "Return ONLY the English image prompt. " +
+        "Do not include explanations, introductions or quotation marks."
+    },
+    {
+      role: "user",
+      content: prompt
+    }
+  ]);
+
+  const translated = answer
+    .replace(/```[\s\S]*?```/g, text => text.replace(/```/g, ""))
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!translated) {
+    throw new Error("Не удалось перевести описание изображения.");
+  }
+
+  return translated.slice(0, 2048);
+}
+
 // ==========================================
 // ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ AI HORDE
 // ==========================================
