@@ -27,7 +27,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
+const IMAGE_MODEL = "AI Horde";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
 
@@ -1357,9 +1357,7 @@ app.get("/api/status", (req, res) => {
     geminiKeysTotal: keys.length,
     geminiKeysActive: activeKeys,
     uploadsEnabled: true,
-    imageGenerationEnabled: Boolean(
-      process.env.OPENAI_IMAGE_API_KEY
-    )
+   imageGenerationEnabled: true
   });
 });
 
@@ -1951,61 +1949,150 @@ app.post(
     }
   }
 );
+
 // ==========================================
-// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ OPENAI
+// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ AI HORDE
 // ==========================================
 
-async function generateOpenAIImage(prompt) {
-  const apiKey = process.env.OPENAI_IMAGE_API_KEY;
+async function generateHordeImage(prompt) {
+  const apiKey = process.env.AI_HORDE_API_KEY || "0000000000";
 
-  if (!apiKey) {
-    throw new Error("OPENAI_IMAGE_API_KEY не настроен.");
-  }
+  const headers = {
+    "Content-Type": "application/json",
+    "apikey": apiKey,
+    "Client-Agent": "PinskAI:1.0:artamonovzahar466@gmail.com"
+  };
 
-  const response = await fetch(
-    "https://api.openai.com/v1/images/generations",
+  const submitResponse = await fetch(
+    "https://aihorde.net/api/v2/generate/async",
     {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({
-        model: IMAGE_MODEL,
         prompt: String(prompt).slice(0, 2048),
-        n: 1,
-        size: "1024x1024",
-        quality: "high",
-        output_format: "png"
+        params: {
+          width: 512,
+          height: 512,
+          steps: 25,
+          n: 1,
+          cfg_scale: 7,
+          sampler_name: "k_euler",
+          karras: true
+        },
+        nsfw: false,
+        censor_nsfw: true,
+        trusted_workers: false,
+        slow_workers: true,
+        r2: true,
+        shared: false
       }),
-      signal: AbortSignal.timeout(180000)
+      signal: AbortSignal.timeout(30000)
     }
   );
 
-  const data = await response.json().catch(() => ({}));
+  const submitData = await submitResponse.json().catch(() => ({}));
 
-  if (!response.ok) {
-    const error = new Error(
-      data?.error?.message ||
-      `OpenAI Images API вернул HTTP ${response.status}`
+  if (!submitResponse.ok || !submitData.id) {
+    throw new Error(
+      submitData.message ||
+      `AI Horde: ошибка запуска генерации (${submitResponse.status})`
     );
-
-    error.status = response.status;
-    throw error;
   }
 
-  const imageData = data?.data?.[0]?.b64_json;
+  const requestId = submitData.id;
 
-  if (
-    typeof imageData !== "string" ||
-    imageData.length < 100
-  ) {
-    throw new Error("OpenAI не вернул данные изображения.");
+  let finished = false;
+
+  for (let attempt = 0; attempt < 108; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    const checkResponse = await fetch(
+      `https://aihorde.net/api/v2/generate/check/${requestId}`,
+      {
+        headers,
+        signal: AbortSignal.timeout(20000)
+      }
+    );
+
+    const checkData = await checkResponse.json().catch(() => ({}));
+
+    if (!checkResponse.ok) {
+      throw new Error("AI Horde: не удалось проверить статус генерации.");
+    }
+
+    if (checkData.faulted) {
+      throw new Error("AI Horde: генерация завершилась с ошибкой.");
+    }
+
+    if (checkData.done) {
+      finished = true;
+      break;
+    }
+  }
+
+  if (!finished) {
+    throw new Error("AI Horde: истекло время ожидания генерации.");
+  }
+
+  const statusResponse = await fetch(
+    `https://aihorde.net/api/v2/generate/status/${requestId}`,
+    {
+      headers,
+      signal: AbortSignal.timeout(30000)
+    }
+  );
+
+  const statusData = await statusResponse.json().catch(() => ({}));
+
+  if (!statusResponse.ok) {
+    throw new Error("AI Horde: не удалось получить готовое изображение.");
+  }
+
+  const imageUrl = statusData?.generations?.[0]?.img;
+
+  if (typeof imageUrl !== "string" || !imageUrl) {
+    throw new Error("AI Horde не вернул изображение.");
+  }
+
+  if (imageUrl.startsWith("data:image/")) {
+    const match = imageUrl.match(
+      /^data:(image\/[^;]+);base64,(.+)$/
+    );
+
+    if (!match) {
+      throw new Error("AI Horde вернул некорректное изображение.");
+    }
+
+    return {
+      mimeType: match[1],
+      data: match[2],
+      text: ""
+    };
+  }
+
+  const imageResponse = await fetch(imageUrl, {
+    signal: AbortSignal.timeout(60000)
+  });
+
+  if (!imageResponse.ok) {
+    throw new Error("Не удалось загрузить готовое изображение AI Horde.");
+  }
+
+  const contentType = imageResponse.headers.get("content-type") || "image/png";
+
+  if (!contentType.startsWith("image/")) {
+    throw new Error("AI Horde вернул файл неподдерживаемого формата.");
+  }
+
+  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+  if (!imageBuffer.length || imageBuffer.length > 15 * 1024 * 1024) {
+    throw new Error("Размер изображения некорректен.");
   }
 
   return {
-    mimeType: "image/png",
-    data: imageData,
+    mimeType: contentType.split(";")[0],
+    data: imageBuffer.toString("base64"),
     text: ""
   };
 }
@@ -2014,12 +2101,6 @@ async function imageGenerationHandler(req, res) {
   let reserved = false;
 
   try {
-    if (!process.env.OPENAI_IMAGE_API_KEY) {
-      return res.status(503).json({
-        error: "Генерация изображений временно недоступна. Не настроен OpenAI Image API."
-      });
-    }
-
     const prompt = String(
       req.body.prompt || req.body.message || ""
     ).trim();
@@ -2056,7 +2137,7 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateOpenAIImage(prompt);
+    const result = await generateHordeImage(prompt);
 
     res.json({
       success: true,
@@ -2068,23 +2149,19 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error(
-      "OpenAI image generation error:",
-      error.message
-    );
+    console.error("AI Horde image generation error:", error.message);
 
     if (reserved) {
       releaseCounter(req.user.id, "images", 1);
     }
 
-    const status =
-      error.status === 429 ? 503 :
-      error.status === 401 || error.status === 403 ? 503 :
-      500;
+    const status = error.name === "TimeoutError" || error.status === 429
+      ? 503
+      : 500;
 
     res.status(status).json({
       error: status === 503
-        ? "OpenAI Image API временно недоступен, превышена квота или неверно настроен API-ключ. Попробуй позже."
+        ? "AI Horde занят или не успел создать изображение. Попробуй позже."
         : "Не удалось создать изображение. Попробуй изменить описание."
     });
   }
