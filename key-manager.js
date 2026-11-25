@@ -13,6 +13,10 @@ const SERVER_COOLDOWN_MS = 5000;
 
 let cachedKeys = null;
 
+// =====================================================
+// ENCRYPTION
+// =====================================================
+
 function deriveKeys() {
   if (cachedKeys) return cachedKeys;
 
@@ -99,99 +103,97 @@ function maskApiKey(apiKey) {
     value.slice(-4);
 }
 
-function hasColumn(db, table, column) {
-  return db.prepare(
-    `PRAGMA table_info(${table})`
-  ).all().some(item => item.name === column);
-}
+// =====================================================
+// POSTGRESQL HELPERS
+// =====================================================
 
-function addColumnIfMissing(db, table, column, definition) {
-  if (!hasColumn(db, table, column)) {
-    db.exec(
-      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`
-    );
+async function withTransaction(db, callback) {
+  let client;
+  let shouldRelease = false;
+
+  if (typeof db.connect === "function") {
+    client = await db.connect();
+    shouldRelease = true;
+  } else {
+    client = db;
+  }
+
+  try {
+    await client.query("BEGIN");
+
+    const result = await callback(client);
+
+    await client.query("COMMIT");
+
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error(
+        "PostgreSQL rollback error:",
+        rollbackError.message
+      );
+    }
+
+    throw error;
+  } finally {
+    if (shouldRelease) {
+      client.release();
+    }
   }
 }
 
-function initGeminiKeysTable(db) {
-  db.exec(`
+// =====================================================
+// DATABASE INITIALIZATION
+// =====================================================
+
+async function initGeminiKeysTable(db) {
+  await db.query(`
     CREATE TABLE IF NOT EXISTS gemini_keys (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       key_hash TEXT UNIQUE NOT NULL,
       masked_key TEXT NOT NULL,
       encrypted_key TEXT NOT NULL,
       iv TEXT NOT NULL,
       auth_tag TEXT NOT NULL,
       is_active INTEGER DEFAULT 1,
-      usage_count INTEGER DEFAULT 0,
-      error_count INTEGER DEFAULT 0,
-      last_used DATETIME,
+      usage_count BIGINT DEFAULT 0,
+      error_count BIGINT DEFAULT 0,
+      last_used TIMESTAMPTZ,
       last_error TEXT,
-      cooldown_until DATETIME,
-      lease_until DATETIME,
+      cooldown_until BIGINT,
+      lease_until BIGINT,
       lease_token TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    )
   `);
 
-  addColumnIfMissing(
-    db, "gemini_keys", "key_hash", "TEXT"
-  );
+  const columns = [
+    ["key_hash", "TEXT"],
+    ["masked_key", "TEXT"],
+    ["encrypted_key", "TEXT"],
+    ["iv", "TEXT"],
+    ["auth_tag", "TEXT"],
+    ["is_active", "INTEGER DEFAULT 1"],
+    ["usage_count", "BIGINT DEFAULT 0"],
+    ["error_count", "BIGINT DEFAULT 0"],
+    ["last_used", "TIMESTAMPTZ"],
+    ["last_error", "TEXT"],
+    ["cooldown_until", "BIGINT"],
+    ["lease_until", "BIGINT"],
+    ["lease_token", "TEXT"],
+    ["created_at", "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP"]
+  ];
 
-  addColumnIfMissing(
-    db, "gemini_keys", "masked_key", "TEXT"
-  );
+  for (const [column, definition] of columns) {
+    await db.query(`
+      ALTER TABLE gemini_keys
+      ADD COLUMN IF NOT EXISTS ${column} ${definition}
+    `);
+  }
 
-  addColumnIfMissing(
-    db, "gemini_keys", "encrypted_key", "TEXT"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "iv", "TEXT"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "auth_tag", "TEXT"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "is_active", "INTEGER DEFAULT 1"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "usage_count", "INTEGER DEFAULT 0"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "error_count", "INTEGER DEFAULT 0"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "last_used", "DATETIME"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "last_error", "TEXT"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "cooldown_until", "DATETIME"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "lease_until", "DATETIME"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "lease_token", "TEXT"
-  );
-
-  addColumnIfMissing(
-    db, "gemini_keys", "created_at",
-    "DATETIME DEFAULT CURRENT_TIMESTAMP"
-  );
-
-  db.exec(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_gemini_keys_active
     ON gemini_keys(is_active);
 
@@ -203,8 +205,12 @@ function initGeminiKeysTable(db) {
   `);
 }
 
-function getAllKeys(db) {
-  return db.prepare(`
+// =====================================================
+// GET ALL KEYS
+// =====================================================
+
+async function getAllKeys(db) {
+  const result = await db.query(`
     SELECT
       id,
       masked_key,
@@ -217,10 +223,16 @@ function getAllKeys(db) {
       created_at
     FROM gemini_keys
     ORDER BY id DESC
-  `).all();
+  `);
+
+  return result.rows;
 }
 
-function insertKey(db, apiKey) {
+// =====================================================
+// INSERT KEY
+// =====================================================
+
+async function insertKey(db, apiKey) {
   const value = String(apiKey || "").trim();
 
   if (value.length < 10 || value.length > 500) {
@@ -229,46 +241,50 @@ function insertKey(db, apiKey) {
 
   const keyHash = hashApiKey(value);
 
-  const existing = db.prepare(`
-    SELECT id FROM gemini_keys
-    WHERE key_hash = ?
-  `).get(keyHash);
-
-  if (existing) {
-    throw new Error("Этот API-ключ уже добавлен.");
-  }
-
   const encrypted = encryptApiKey(value);
   const masked = maskApiKey(value);
 
-  const result = db.prepare(`
-    INSERT INTO gemini_keys (
-      key_hash,
-      masked_key,
-      encrypted_key,
-      iv,
-      auth_tag,
-      is_active,
-      usage_count,
-      error_count
-    )
-    VALUES (?, ?, ?, ?, ?, 1, 0, 0)
-  `).run(
-    keyHash,
-    masked,
-    encrypted.encrypted_key,
-    encrypted.iv,
-    encrypted.auth_tag
-  );
+  try {
+    const result = await db.query(`
+      INSERT INTO gemini_keys (
+        key_hash,
+        masked_key,
+        encrypted_key,
+        iv,
+        auth_tag,
+        is_active,
+        usage_count,
+        error_count
+      )
+      VALUES ($1, $2, $3, $4, $5, 1, 0, 0)
+      RETURNING id
+    `, [
+      keyHash,
+      masked,
+      encrypted.encrypted_key,
+      encrypted.iv,
+      encrypted.auth_tag
+    ]);
 
-  return {
-    id: result.lastInsertRowid,
-    masked_key: masked
-  };
+    return {
+      id: result.rows[0].id,
+      masked_key: masked
+    };
+  } catch (error) {
+    if (error.code === "23505") {
+      throw new Error("Этот API-ключ уже добавлен.");
+    }
+
+    throw error;
+  }
 }
 
-function toggleKeyActive(db, id) {
-  return db.prepare(`
+// =====================================================
+// TOGGLE KEY
+// =====================================================
+
+async function toggleKeyActive(db, id) {
+  return db.query(`
     UPDATE gemini_keys
     SET
       is_active = CASE
@@ -277,153 +293,163 @@ function toggleKeyActive(db, id) {
       END,
       lease_until = NULL,
       lease_token = NULL
-    WHERE id = ?
-  `).run(id);
+    WHERE id = $1
+  `, [id]);
 }
 
-function deleteKey(db, id) {
-  return db.prepare(`
+// =====================================================
+// DELETE KEY
+// =====================================================
+
+async function deleteKey(db, id) {
+  return db.query(`
     DELETE FROM gemini_keys
-    WHERE id = ?
-  `).run(id);
+    WHERE id = $1
+  `, [id]);
 }
 
-function getNextApiKey(db, excludedIds = []) {
-  const excluded = new Set(
-    (excludedIds || []).map(Number)
-  );
+// =====================================================
+// GET NEXT AVAILABLE KEY
+// =====================================================
+
+async function getNextApiKey(db, excludedIds = []) {
+  const excluded = (excludedIds || [])
+    .map(Number)
+    .filter(Number.isSafeInteger);
 
   const now = Date.now();
 
-  const select = db.prepare(`
-    SELECT *
-    FROM gemini_keys
-    WHERE is_active = 1
-      AND (
-        cooldown_until IS NULL
-        OR CAST(cooldown_until AS INTEGER) <= ?
-        OR datetime(cooldown_until) <= datetime('now')
-      )
-      AND (
-        lease_until IS NULL
-        OR CAST(lease_until AS INTEGER) <= ?
-        OR datetime(lease_until) <= datetime('now')
-      )
-    ORDER BY
-      error_count ASC,
-      usage_count ASC,
-      last_used ASC,
-      id ASC
-  `);
+  return withTransaction(db, async client => {
+    const result = await client.query(`
+      SELECT *
+      FROM gemini_keys
+      WHERE is_active = 1
+        AND (
+          cooldown_until IS NULL
+          OR cooldown_until <= $1
+        )
+        AND (
+          lease_until IS NULL
+          OR lease_until <= $1
+        )
+        AND NOT (id = ANY($2::bigint[]))
+      ORDER BY
+        error_count ASC,
+        usage_count ASC,
+        last_used ASC NULLS FIRST,
+        id ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    `, [now, excluded]);
 
-  const update = db.prepare(`
-    UPDATE gemini_keys
-    SET
-      lease_until = ?,
-      lease_token = ?,
-      last_used = CURRENT_TIMESTAMP
-    WHERE id = ?
-      AND is_active = 1
-      AND (
-        lease_until IS NULL
-        OR CAST(lease_until AS INTEGER) <= ?
-        OR datetime(lease_until) <= datetime('now')
-      )
-  `);
-
-  const transaction = db.transaction(() => {
-    const candidates = select.all(now, now);
-
-    for (const row of candidates) {
-      if (excluded.has(Number(row.id))) continue;
-
-      const leaseToken = crypto.randomUUID();
-      const leaseUntil = now + LEASE_MS;
-
-      const result = update.run(
-        leaseUntil,
-        leaseToken,
-        row.id,
-        now
-      );
-
-      if (result.changes !== 1) continue;
-
-      return {
-        id: row.id,
-        apiKey: decryptApiKey(row),
-        leaseToken
-      };
+    if (result.rows.length === 0) {
+      return null;
     }
 
-    return null;
-  });
+    const row = result.rows[0];
+    const leaseToken = crypto.randomUUID();
+    const leaseUntil = now + LEASE_MS;
 
-  return transaction.immediate();
+    await client.query(`
+      UPDATE gemini_keys
+      SET
+        lease_until = $1,
+        lease_token = $2,
+        last_used = CURRENT_TIMESTAMP
+      WHERE id = $3
+    `, [
+      leaseUntil,
+      leaseToken,
+      row.id
+    ]);
+
+    return {
+      id: row.id,
+      apiKey: decryptApiKey(row),
+      leaseToken
+    };
+  });
 }
 
-function extendKeyLease(db, keyId, leaseToken) {
-  return db.prepare(`
+// =====================================================
+// EXTEND KEY LEASE
+// =====================================================
+
+async function extendKeyLease(db, keyId, leaseToken) {
+  return db.query(`
     UPDATE gemini_keys
-    SET lease_until = ?
-    WHERE id = ?
-      AND lease_token = ?
+    SET lease_until = $1
+    WHERE id = $2
+      AND lease_token = $3
       AND is_active = 1
-  `).run(
+  `, [
     Date.now() + LEASE_MS,
     keyId,
     leaseToken
-  );
+  ]);
 }
 
-function recordKeyResultAndRelease(
+// =====================================================
+// RECORD RESULT AND RELEASE KEY
+// =====================================================
+
+async function recordKeyResultAndRelease(
   db,
   keyId,
   leaseToken,
   result = {}
 ) {
   const success = result.success === true;
+
   const errorMessage = result.error
-    ? String(result.error.message || result.error).slice(0, 1000)
+    ? String(
+        result.error.message || result.error
+      ).slice(0, 1000)
     : null;
 
   if (success) {
-    return db.prepare(`
+    return db.query(`
       UPDATE gemini_keys
       SET
         usage_count = usage_count + 1,
-        error_count = MAX(0, error_count - 1),
+        error_count = GREATEST(0, error_count - 1),
         last_error = NULL,
         cooldown_until = NULL,
         lease_until = NULL,
         lease_token = NULL
-      WHERE id = ?
-        AND lease_token = ?
-    `).run(keyId, leaseToken);
+      WHERE id = $1
+        AND lease_token = $2
+    `, [keyId, leaseToken]);
   }
 
   const cooldownUntil = result.cooldownUntil || null;
 
-  return db.prepare(`
+  return db.query(`
     UPDATE gemini_keys
     SET
       error_count = error_count + 1,
-      last_error = ?,
-      cooldown_until = COALESCE(?, cooldown_until),
+      last_error = $1,
+      cooldown_until = COALESCE($2, cooldown_until),
       lease_until = NULL,
       lease_token = NULL
-    WHERE id = ?
-      AND lease_token = ?
-  `).run(
+    WHERE id = $3
+      AND lease_token = $4
+  `, [
     errorMessage,
     cooldownUntil,
     keyId,
     leaseToken
-  );
+  ]);
 }
 
+// =====================================================
+// ERROR CLASSIFICATION
+// =====================================================
+
 function getErrorStatus(error) {
-  const status = Number(error?.status || error?.statusCode);
+  const status = Number(
+    error?.status || error?.statusCode
+  );
 
   return Number.isFinite(status) ? status : 0;
 }
@@ -438,7 +464,9 @@ function getErrorCode(error) {
 
 function isQuotaError(error) {
   const status = getErrorStatus(error);
-  const message = String(error?.message || "").toLowerCase();
+  const message = String(
+    error?.message || ""
+  ).toLowerCase();
 
   return status === 429 ||
     message.includes("quota exceeded") ||
@@ -450,7 +478,9 @@ function isQuotaError(error) {
 
 function isInvalidKeyError(error) {
   const status = getErrorStatus(error);
-  const message = String(error?.message || "").toLowerCase();
+  const message = String(
+    error?.message || ""
+  ).toLowerCase();
 
   if (status === 401) return true;
 
@@ -468,7 +498,9 @@ function isInvalidKeyError(error) {
 
 function isNetworkError(error) {
   const code = getErrorCode(error);
-  const message = String(error?.message || "").toLowerCase();
+  const message = String(
+    error?.message || ""
+  ).toLowerCase();
 
   const networkCodes = [
     "ECONNRESET",
@@ -513,13 +545,26 @@ function isServerTransientError(error) {
     isNetworkError(error);
 }
 
+// =====================================================
+// WAIT FOR AVAILABLE KEY
+// =====================================================
+
 function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
 }
 
-async function waitForAvailableKey(db, excludedIds, startedAt) {
+async function waitForAvailableKey(
+  db,
+  excludedIds,
+  startedAt
+) {
   while (Date.now() - startedAt < KEY_WAIT_MS) {
-    const key = getNextApiKey(db, excludedIds);
+    const key = await getNextApiKey(
+      db,
+      excludedIds
+    );
 
     if (key) return key;
 
@@ -529,16 +574,23 @@ async function waitForAvailableKey(db, excludedIds, startedAt) {
   return null;
 }
 
+// =====================================================
+// EXECUTE WITH AUTOMATIC KEY ROTATION
+// =====================================================
+
 async function executeWithKeyRotation(
   db,
   callback,
   options = {}
 ) {
   if (typeof callback !== "function") {
-    throw new TypeError("Не передана функция запроса к Gemini.");
+    throw new TypeError(
+      "Не передана функция запроса к Gemini."
+    );
   }
 
   const excludedIds = new Set();
+
   const maxAttempts = Math.max(
     1,
     Math.min(
@@ -548,11 +600,15 @@ async function executeWithKeyRotation(
   );
 
   const startedAt = Date.now();
+
   let lastError = null;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
-    let key = getNextApiKey(db, [...excludedIds]);
+    let key = await getNextApiKey(
+      db,
+      [...excludedIds]
+    );
 
     if (!key && attempts === 0) {
       key = await waitForAvailableKey(
@@ -565,13 +621,14 @@ async function executeWithKeyRotation(
     if (!key) break;
 
     attempts += 1;
+
     excludedIds.add(Number(key.id));
 
     const controller = new AbortController();
 
-    const heartbeat = setInterval(() => {
+    const heartbeat = setInterval(async () => {
       try {
-        extendKeyLease(
+        await extendKeyLease(
           db,
           key.id,
           key.leaseToken
@@ -600,7 +657,7 @@ async function executeWithKeyRotation(
         }
       );
 
-      recordKeyResultAndRelease(
+      await recordKeyResultAndRelease(
         db,
         key.id,
         key.leaseToken,
@@ -608,6 +665,7 @@ async function executeWithKeyRotation(
       );
 
       finished = true;
+
       return result;
 
     } catch (error) {
@@ -621,12 +679,14 @@ async function executeWithKeyRotation(
       let cooldownUntil = null;
 
       if (quotaError) {
-        cooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
+        cooldownUntil = Date.now() +
+          QUOTA_COOLDOWN_MS;
       } else if (isServerTransientError(error)) {
-        cooldownUntil = Date.now() + SERVER_COOLDOWN_MS;
+        cooldownUntil = Date.now() +
+          SERVER_COOLDOWN_MS;
       }
 
-      recordKeyResultAndRelease(
+      await recordKeyResultAndRelease(
         db,
         key.id,
         key.leaseToken,
@@ -641,18 +701,20 @@ async function executeWithKeyRotation(
 
       if (invalidKey) {
         try {
-          db.prepare(`
+          await db.query(`
             UPDATE gemini_keys
             SET
               is_active = 0,
-              last_error = ?,
+              last_error = $1,
               lease_until = NULL,
               lease_token = NULL
-            WHERE id = ?
-          `).run(
-            String(error.message || "Invalid API key").slice(0, 1000),
+            WHERE id = $2
+          `, [
+            String(
+              error.message || "Invalid API key"
+            ).slice(0, 1000),
             key.id
-          );
+          ]);
         } catch (dbError) {
           console.error(
             "Gemini invalid key update error:",
@@ -668,13 +730,18 @@ async function executeWithKeyRotation(
       }
 
       if (transientError || quotaError) {
-        console.error("Gemini key request failed:", {
-          keyId: key.id,
-          status,
-          code: getErrorCode(error) || null,
-          attempt: attempts,
-          message: String(error.message || error).slice(0, 500)
-        });
+        console.error(
+          "Gemini key request failed:",
+          {
+            keyId: key.id,
+            status,
+            code: getErrorCode(error) || null,
+            attempt: attempts,
+            message: String(
+              error.message || error
+            ).slice(0, 500)
+          }
+        );
 
         continue;
       }
@@ -688,13 +755,15 @@ async function executeWithKeyRotation(
         try {
           controller.abort();
 
-          recordKeyResultAndRelease(
+          await recordKeyResultAndRelease(
             db,
             key.id,
             key.leaseToken,
             {
               success: false,
-              error: new Error("Запрос был прерван.")
+              error: new Error(
+                "Запрос был прерван."
+              )
             }
           );
         } catch (releaseError) {
@@ -710,7 +779,9 @@ async function executeWithKeyRotation(
   if (lastError) {
     const error = new Error(
       "Не удалось выполнить запрос после проверки доступных Gemini API-ключей. " +
-      String(lastError.message || "").slice(0, 500)
+      String(
+        lastError.message || ""
+      ).slice(0, 500)
     );
 
     error.status = getErrorStatus(lastError);
@@ -729,6 +800,10 @@ async function executeWithKeyRotation(
 
   throw error;
 }
+
+// =====================================================
+// EXPORTS
+// =====================================================
 
 module.exports = {
   initGeminiKeysTable,
