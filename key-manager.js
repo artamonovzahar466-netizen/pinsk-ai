@@ -225,6 +225,12 @@ async function getAllKeys(db) {
     ORDER BY id DESC
   `);
 
+  if (!result || !Array.isArray(result.rows)) {
+    throw new Error(
+      "PostgreSQL getAllKeys: запрос не вернул массив rows."
+    );
+  }
+
   return result.rows;
 }
 
@@ -240,7 +246,6 @@ async function insertKey(db, apiKey) {
   }
 
   const keyHash = hashApiKey(value);
-
   const encrypted = encryptApiKey(value);
   const masked = maskApiKey(value);
 
@@ -621,7 +626,6 @@ async function executeWithKeyRotation(
     if (!key) break;
 
     attempts += 1;
-
     excludedIds.add(Number(key.id));
 
     const controller = new AbortController();
