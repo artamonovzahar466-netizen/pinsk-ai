@@ -1,9 +1,10 @@
+
 "use strict";
 
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const Database = require("better-sqlite3");
+const { Pool } = require("pg");
 const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
@@ -30,6 +31,24 @@ const MODEL = process.env.OPENAI_MODEL || "gemini-3.5-flash-lite";
 const IMAGE_MODEL = "AI Horde";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL не задан. Проверь настройки Render.");
+}
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL.includes("localhost")
+    ? false
+    : { rejectUnauthorized: false },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 15000
+});
+
+pool.on("error", error => {
+  console.error("PostgreSQL pool error:", error.message);
+});
+
 
 // ==========================================
 // RESEND EMAIL API
@@ -42,7 +61,8 @@ async function sendVerificationEmail(email, code) {
     throw new Error("RESEND_API_KEY не настроен в Render.");
   }
 
-  const from = process.env.RESEND_FROM || "Pinsk AI <onboarding@resend.dev>";
+  const from = process.env.RESEND_FROM ||
+    "Pinsk AI <onboarding@resend.dev>";
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
@@ -59,7 +79,7 @@ async function sendVerificationEmail(email, code) {
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -87,66 +107,16 @@ async function sendVerificationEmail(email, code) {
 }
 
 
+// ==========================================
+// GEMINI API KEY LEGACY FALLBACK
+// ==========================================
+
 const LEGACY_API_KEY = process.env.OPENAI_API_KEY;
 
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : __dirname;
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = path.join(DATA_DIR, "pinsk.db");
-const OLD_DB_PATH = path.join(__dirname, "pinsk.db");
-
-if (
-  DB_PATH !== OLD_DB_PATH &&
-  !fs.existsSync(DB_PATH) &&
-  fs.existsSync(OLD_DB_PATH)
-) {
-  fs.copyFileSync(OLD_DB_PATH, DB_PATH);
-
-  for (const suffix of ["-wal", "-shm"]) {
-    const oldFile = OLD_DB_PATH + suffix;
-    const newFile = DB_PATH + suffix;
-
-    if (fs.existsSync(oldFile)) {
-      fs.copyFileSync(oldFile, newFile);
-    }
-  }
-
-  console.log("Pinsk: старая база перенесена.");
-}
-
-const db = new Database(DB_PATH);
-
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-
-initGeminiKeysTable(db);
-
-if (LEGACY_API_KEY && getAllKeys(db).length === 0) {
-  try {
-    insertKey(db, LEGACY_API_KEY.trim());
-    console.log("Pinsk: старый API-ключ перенесён в менеджер.");
-  } catch (error) {
-    console.error("Не удалось перенести старый API-ключ:", error.message);
-  }
-}
-
-function getGeminiKeys() {
-  return getAllKeys(db);
-}
-
-function isKeyActive(key) {
-  if (key.is_active !== undefined) return Boolean(key.is_active);
-  if (key.active !== undefined) return Boolean(key.active);
-  if (key.enabled !== undefined) return Boolean(key.enabled);
-  return true;
-}
-
-function hasActiveGeminiKeys() {
-  return getGeminiKeys().some(isKeyActive);
-}
+// ==========================================
+// APPLICATION SETTINGS
+// ==========================================
 
 const LIMITS = {
   FREE: {
@@ -207,8 +177,126 @@ app.use(express.urlencoded({
   limit: "25mb"
 }));
 
+
 // ==========================================
-// ЗАГРУЗКА ФАЙЛОВ
+// DATABASE INITIALIZATION
+// ==========================================
+
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'FREE',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      is_blocked INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      user_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id BIGSERIAL PRIMARY KEY,
+      conversation_id TEXT,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id BIGSERIAL PRIMARY KEY,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      user_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_usage (
+      user_id TEXT NOT NULL,
+      usage_date TEXT NOT NULL,
+      messages INTEGER NOT NULL DEFAULT 0,
+      images INTEGER NOT NULL DEFAULT 0,
+      files INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, usage_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      email TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_sent_at BIGINT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_user
+      ON sessions(user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_sessions_expiry
+      ON sessions(expires_at);
+
+    CREATE INDEX IF NOT EXISTS idx_conversations_user
+      ON conversations(user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation
+      ON messages(conversation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_memories_user
+      ON memories(user_id);
+
+    CREATE INDEX IF NOT EXISTS idx_usage_user_date
+      ON daily_usage(user_id, usage_date);
+  `);
+
+  await pool.query(`
+    UPDATE users
+    SET role = 'OWNER'
+    WHERE LOWER(email) = LOWER($1)
+  `, [OWNER_EMAIL]);
+
+  await initGeminiKeysTable(pool);
+
+  if (LEGACY_API_KEY) {
+    const keys = await getAllKeys(pool);
+
+    if (keys.length === 0) {
+      try {
+        await insertKey(pool, LEGACY_API_KEY.trim());
+        console.log("Pinsk: старый API-ключ добавлен в менеджер.");
+      } catch (error) {
+        console.error(
+          "Не удалось перенести старый API-ключ:",
+          error.message
+        );
+      }
+    }
+  }
+
+  await pool.query(`
+    DELETE FROM sessions
+    WHERE expires_at <= $1
+  `, [Date.now()]);
+
+  console.log("Pinsk: PostgreSQL подключён и схема проверена.");
+}
+
+
+// ==========================================
+// FILE UPLOADS
 // ==========================================
 
 const MAX_FILE_SIZE = 12 * 1024 * 1024;
@@ -265,18 +353,17 @@ async function extractFileText(file) {
     const result = await mammoth.extractRawText({
       buffer: file.buffer
     });
+
     return result.value || "";
   }
 
   if (extension === ".xlsx" || extension === ".xls") {
     const workbook = XLSX.read(file.buffer, { type: "buffer" });
 
-    return workbook.SheetNames.map(sheetName => {
-      return (
-        "Лист: " + sheetName + "\n" +
-        XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
-      );
-    }).join("\n\n");
+    return workbook.SheetNames.map(sheetName => (
+      "Лист: " + sheetName + "\n" +
+      XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
+    )).join("\n\n");
   }
 
   if (extension === ".csv") {
@@ -285,12 +372,10 @@ async function extractFileText(file) {
       raw: false
     });
 
-    return workbook.SheetNames.map(sheetName => {
-      return (
-        "Лист: " + sheetName + "\n" +
-        XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
-      );
-    }).join("\n\n");
+    return workbook.SheetNames.map(sheetName => (
+      "Лист: " + sheetName + "\n" +
+      XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
+    )).join("\n\n");
   }
 
   return file.buffer.toString("utf8");
@@ -308,102 +393,14 @@ function fileMime(file) {
     ".gif": "image/gif"
   };
 
-  return types[extension] || file.mimetype || "application/octet-stream";
+  return types[extension] ||
+    file.mimetype ||
+    "application/octet-stream";
 }
+
 
 // ==========================================
-// БАЗА ДАННЫХ
-// ==========================================
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'FREE',
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    title TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS daily_usage (
-    user_id TEXT NOT NULL,
-    usage_date TEXT NOT NULL,
-    messages INTEGER NOT NULL DEFAULT 0,
-    images INTEGER NOT NULL DEFAULT 0,
-    files INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (user_id, usage_date)
-  );
-`);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS email_verifications (
-    email TEXT PRIMARY KEY COLLATE NOCASE,
-    name TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    code_hash TEXT NOT NULL,
-    expires_at INTEGER NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    last_sent_at INTEGER NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-
-function hasColumn(table, column) {
-  return db.prepare(`PRAGMA table_info(${table})`)
-    .all()
-    .some(item => item.name === column);
-}
-
-if (!hasColumn("conversations", "user_id")) {
-  db.exec("ALTER TABLE conversations ADD COLUMN user_id TEXT");
-}
-
-if (!hasColumn("memories", "user_id")) {
-  db.exec("ALTER TABLE memories ADD COLUMN user_id TEXT");
-}
-
-if (!hasColumn("users", "is_blocked")) {
-  db.exec(`
-    ALTER TABLE users
-    ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0
-  `);
-}
-
-db.prepare(`
-  UPDATE users
-  SET role = 'OWNER'
-  WHERE lower(email) = ?
-`).run(OWNER_EMAIL);
-
-// ==========================================
-// ОБЩИЕ ФУНКЦИИ
+// COMMON HELPERS
 // ==========================================
 
 function usageDate() {
@@ -500,11 +497,33 @@ function publicUser(user) {
     plan: user.role
   };
 }
+
+function isKeyActive(key) {
+  if (key.is_active !== undefined) {
+    return Boolean(Number(key.is_active));
+  }
+
+  if (key.active !== undefined) return Boolean(key.active);
+  if (key.enabled !== undefined) return Boolean(key.enabled);
+
+  return true;
+}
+
+async function getGeminiKeys() {
+  return getAllKeys(pool);
+}
+
+async function hasActiveGeminiKeys() {
+  const keys = await getGeminiKeys();
+  return keys.some(isKeyActive);
+}
+
+
 // ==========================================
-// АВТОРИЗАЦИЯ
+// AUTHENTICATION
 // ==========================================
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   try {
     const token = cookieToken(req);
 
@@ -514,11 +533,13 @@ function auth(req, res, next) {
       });
     }
 
-    const session = db.prepare(`
+    const sessionResult = await pool.query(`
       SELECT user_id
       FROM sessions
-      WHERE token_hash = ? AND expires_at > ?
-    `).get(hashToken(token), Date.now());
+      WHERE token_hash = $1 AND expires_at > $2
+    `, [hashToken(token), Date.now()]);
+
+    const session = sessionResult.rows[0];
 
     if (!session) {
       clearSessionCookie(res, req);
@@ -528,11 +549,13 @@ function auth(req, res, next) {
       });
     }
 
-    const user = db.prepare(`
+    const userResult = await pool.query(`
       SELECT id, name, email, role, created_at, is_blocked
       FROM users
-      WHERE id = ?
-    `).get(session.user_id);
+      WHERE id = $1
+    `, [session.user_id]);
+
+    const user = userResult.rows[0];
 
     if (!user) {
       clearSessionCookie(res, req);
@@ -546,15 +569,19 @@ function auth(req, res, next) {
       user.email.toLowerCase() === OWNER_EMAIL &&
       user.role !== "OWNER"
     ) {
-      db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
-        .run(user.id);
+      await pool.query(
+        "UPDATE users SET role = 'OWNER' WHERE id = $1",
+        [user.id]
+      );
 
       user.role = "OWNER";
     }
 
-    if (user.is_blocked) {
-      db.prepare("DELETE FROM sessions WHERE user_id = ?")
-        .run(user.id);
+    if (Number(user.is_blocked) === 1) {
+      await pool.query(
+        "DELETE FROM sessions WHERE user_id = $1",
+        [user.id]
+      );
 
       clearSessionCookie(res, req);
 
@@ -585,20 +612,21 @@ function requireOwner(req, res, next) {
   next();
 }
 
-function issueSession(user, res, req) {
+async function issueSession(user, res, req) {
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
 
-  db.prepare(`
+  await pool.query(`
     INSERT INTO sessions (token_hash, user_id, expires_at)
-    VALUES (?, ?, ?)
-  `).run(hashToken(token), user.id, expiresAt);
+    VALUES ($1, $2, $3)
+  `, [hashToken(token), user.id, expiresAt]);
 
   setSessionCookie(res, token, req);
 }
 
+
 // ==========================================
-// РЕГИСТРАЦИЯ С EMAIL-ПОДТВЕРЖДЕНИЕМ
+// REGISTRATION
 // ==========================================
 
 app.post("/api/auth/register", async (req, res) => {
@@ -630,11 +658,12 @@ app.post("/api/auth/register", async (req, res) => {
       });
     }
 
-    const existing = db.prepare(
-      "SELECT id FROM users WHERE email = ?"
-    ).get(email);
+    const existing = await pool.query(
+      "SELECT id FROM users WHERE LOWER(email) = $1",
+      [email]
+    );
 
-    if (existing) {
+    if (existing.rows.length) {
       return res.status(409).json({
         error: "Аккаунт уже существует. Используй вход."
       });
@@ -642,21 +671,21 @@ app.post("/api/auth/register", async (req, res) => {
 
     const now = Date.now();
 
-    const pending = db.prepare(`
+    const pendingResult = await pool.query(`
       SELECT last_sent_at
       FROM email_verifications
-      WHERE email = ?
-    `).get(email);
+      WHERE LOWER(email) = $1
+    `, [email]);
 
-    if (pending && now - pending.last_sent_at < 60000) {
+    const pending = pendingResult.rows[0];
+
+    if (pending && now - Number(pending.last_sent_at) < 60000) {
       return res.status(429).json({
         error: "Подожди минуту перед повторной отправкой кода."
       });
     }
 
-    const code = String(
-      crypto.randomInt(100000, 1000000)
-    );
+    const code = String(crypto.randomInt(100000, 1000000));
 
     const codeHash = crypto.createHash("sha256")
       .update(code)
@@ -664,45 +693,40 @@ app.post("/api/auth/register", async (req, res) => {
 
     const storedPassword = makePasswordHash(password);
 
-    db.prepare(`
+    await pool.query(`
       INSERT INTO email_verifications (
-        email,
-        name,
-        password_hash,
-        code_hash,
-        expires_at,
-        attempts,
-        last_sent_at
+        email, name, password_hash, code_hash,
+        expires_at, attempts, last_sent_at
       )
-      VALUES (?, ?, ?, ?, ?, 0, ?)
+      VALUES ($1, $2, $3, $4, $5, 0, $6)
       ON CONFLICT(email) DO UPDATE SET
-        name = excluded.name,
-        password_hash = excluded.password_hash,
-        code_hash = excluded.code_hash,
-        expires_at = excluded.expires_at,
+        name = EXCLUDED.name,
+        password_hash = EXCLUDED.password_hash,
+        code_hash = EXCLUDED.code_hash,
+        expires_at = EXCLUDED.expires_at,
         attempts = 0,
-        last_sent_at = excluded.last_sent_at
-    `).run(
+        last_sent_at = EXCLUDED.last_sent_at
+    `, [
       email,
       name,
       storedPassword,
       codeHash,
       now + 10 * 60 * 1000,
       now
-    );
+    ]);
 
     try {
       await sendVerificationEmail(email, code);
     } catch (mailError) {
       console.error("Verification email error:", mailError.message);
 
-      db.prepare(`
-        DELETE FROM email_verifications
-        WHERE email = ?
-      `).run(email);
+      await pool.query(
+        "DELETE FROM email_verifications WHERE LOWER(email) = $1",
+        [email]
+      );
 
       return res.status(503).json({
-        error: "Не удалось отправить письмо. Проверь настройки Gmail и попробуй позже."
+        error: "Не удалось отправить письмо. Проверь настройки почты и попробуй позже."
       });
     }
 
@@ -721,11 +745,14 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
+
 // ==========================================
-// ПОДТВЕРЖДЕНИЕ EMAIL
+// EMAIL VERIFICATION
 // ==========================================
 
-app.post("/api/auth/verify-email", (req, res) => {
+app.post("/api/auth/verify-email", async (req, res) => {
+  const client = await pool.connect();
+
   try {
     res.setHeader("Cache-Control", "no-store");
 
@@ -744,30 +771,41 @@ app.post("/api/auth/verify-email", (req, res) => {
       });
     }
 
-    const pending = db.prepare(`
+    await client.query("BEGIN");
+
+    const pendingResult = await client.query(`
       SELECT *
       FROM email_verifications
-      WHERE email = ?
-    `).get(email);
+      WHERE LOWER(email) = $1
+      FOR UPDATE
+    `, [email]);
+
+    const pending = pendingResult.rows[0];
 
     if (!pending) {
+      await client.query("ROLLBACK");
+
       return res.status(400).json({
         error: "Регистрация не найдена. Начни регистрацию заново."
       });
     }
 
-    if (pending.expires_at <= Date.now()) {
-      db.prepare(`
-        DELETE FROM email_verifications
-        WHERE email = ?
-      `).run(email);
+    if (Number(pending.expires_at) <= Date.now()) {
+      await client.query(
+        "DELETE FROM email_verifications WHERE LOWER(email) = $1",
+        [email]
+      );
+
+      await client.query("COMMIT");
 
       return res.status(400).json({
         error: "Срок действия кода истёк. Зарегистрируйся заново."
       });
     }
 
-    if (pending.attempts >= 5) {
+    if (Number(pending.attempts) >= 5) {
+      await client.query("ROLLBACK");
+
       return res.status(429).json({
         error: "Слишком много попыток. Запроси новый код."
       });
@@ -784,11 +822,13 @@ app.post("/api/auth/verify-email", (req, res) => {
       crypto.timingSafeEqual(actual, expected);
 
     if (!valid) {
-      db.prepare(`
+      await client.query(`
         UPDATE email_verifications
         SET attempts = attempts + 1
-        WHERE email = ?
-      `).run(email);
+        WHERE LOWER(email) = $1
+      `, [email]);
+
+      await client.query("COMMIT");
 
       return res.status(400).json({
         error: "Неверный код подтверждения."
@@ -798,73 +838,61 @@ app.post("/api/auth/verify-email", (req, res) => {
     const userId = crypto.randomUUID();
     const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
 
-    const createAccount = db.transaction(() => {
-      const existing = db.prepare(
-        "SELECT id FROM users WHERE email = ?"
-      ).get(email);
+    const inserted = await client.query(`
+      INSERT INTO users (
+        id, name, email, password_hash, role
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT DO NOTHING
+      RETURNING id, name, email, role, created_at, is_blocked
+    `, [
+      userId,
+      pending.name,
+      email,
+      pending.password_hash,
+      userRole
+    ]);
 
-      if (existing) {
-        throw new Error("ACCOUNT_ALREADY_EXISTS");
-      }
+    if (!inserted.rows.length) {
+      await client.query("ROLLBACK");
 
-      db.prepare(`
-        INSERT INTO users (
-          id,
-          name,
-          email,
-          password_hash,
-          role
-        )
-        VALUES (?, ?, ?, ?, ?)
-      `).run(
-        userId,
-        pending.name,
-        email,
-        pending.password_hash,
-        userRole
-      );
-
-      db.prepare(`
-        DELETE FROM email_verifications
-        WHERE email = ?
-      `).run(email);
-    });
-
-    try {
-      createAccount();
-    } catch (error) {
-      if (error.message === "ACCOUNT_ALREADY_EXISTS") {
-        return res.status(409).json({
-          error: "Аккаунт уже существует. Используй вход."
-        });
-      }
-
-      throw error;
+      return res.status(409).json({
+        error: "Аккаунт уже существует. Используй вход."
+      });
     }
 
-    const user = db.prepare(`
-      SELECT id, name, email, role, created_at, is_blocked
-      FROM users
-      WHERE id = ?
-    `).get(userId);
+    await client.query(`
+      DELETE FROM email_verifications
+      WHERE LOWER(email) = $1
+    `, [email]);
 
-    issueSession(user, res, req);
+    await client.query("COMMIT");
+
+    await issueSession(inserted.rows[0], res, req);
 
     return res.status(201).json({
       success: true,
-      user: publicUser(user)
+      user: publicUser(inserted.rows[0])
     });
 
   } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+
     console.error("Email verification error:", error.message);
 
     return res.status(500).json({
       error: "Не удалось подтвердить почту. Попробуй позже."
     });
+  } finally {
+    client.release();
   }
 });
+
+
 // ==========================================
-// ПОВТОРНАЯ ОТПРАВКА КОДА
+// RESEND VERIFICATION CODE
 // ==========================================
 
 app.post("/api/auth/resend-code", async (req, res) => {
@@ -879,11 +907,13 @@ app.post("/api/auth/resend-code", async (req, res) => {
       });
     }
 
-    const pending = db.prepare(`
+    const result = await pool.query(`
       SELECT *
       FROM email_verifications
-      WHERE email = ?
-    `).get(email);
+      WHERE LOWER(email) = $1
+    `, [email]);
+
+    const pending = result.rows[0];
 
     if (!pending) {
       return res.json({
@@ -894,33 +924,31 @@ app.post("/api/auth/resend-code", async (req, res) => {
 
     const now = Date.now();
 
-    if (now - pending.last_sent_at < 60000) {
+    if (now - Number(pending.last_sent_at) < 60000) {
       return res.status(429).json({
         error: "Подожди минуту перед повторной отправкой."
       });
     }
 
-    const code = String(
-      crypto.randomInt(100000, 1000000)
-    );
+    const code = String(crypto.randomInt(100000, 1000000));
 
     const codeHash = crypto.createHash("sha256")
       .update(code)
       .digest("hex");
 
-    db.prepare(`
+    await pool.query(`
       UPDATE email_verifications
-      SET code_hash = ?,
-          expires_at = ?,
+      SET code_hash = $1,
+          expires_at = $2,
           attempts = 0,
-          last_sent_at = ?
-      WHERE email = ?
-    `).run(
+          last_sent_at = $3
+      WHERE LOWER(email) = $4
+    `, [
       codeHash,
       now + 10 * 60 * 1000,
       now,
       email
-    );
+    ]);
 
     try {
       await sendVerificationEmail(email, code);
@@ -946,18 +974,23 @@ app.post("/api/auth/resend-code", async (req, res) => {
   }
 });
 
+
 // ==========================================
-// ВХОД
+// LOGIN
 // ==========================================
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
 
-    const user = db.prepare(
-      "SELECT * FROM users WHERE email = ?"
-    ).get(email);
+    const result = await pool.query(`
+      SELECT *
+      FROM users
+      WHERE LOWER(email) = $1
+    `, [email]);
+
+    const user = result.rows[0];
 
     if (!user || !verifyPassword(password, user.password_hash)) {
       return res.status(401).json({
@@ -965,24 +998,26 @@ app.post("/api/auth/login", (req, res) => {
       });
     }
 
-    if (user.is_blocked) {
+    if (Number(user.is_blocked) === 1) {
       return res.status(403).json({
         error: "Аккаунт заблокирован администратором."
       });
     }
 
     if (email === OWNER_EMAIL && user.role !== "OWNER") {
-      db.prepare("UPDATE users SET role = 'OWNER' WHERE id = ?")
-        .run(user.id);
+      await pool.query(
+        "UPDATE users SET role = 'OWNER' WHERE id = $1",
+        [user.id]
+      );
 
       user.role = "OWNER";
     }
 
-    issueSession(user, res, req);
+    await issueSession(user, res, req);
 
     res.setHeader("Cache-Control", "no-store");
 
-    res.json({
+    return res.json({
       success: true,
       user: publicUser(user)
     });
@@ -990,228 +1025,324 @@ app.post("/api/auth/login", (req, res) => {
   } catch (error) {
     console.error("Login error:", error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Ошибка входа."
     });
   }
 });
 
-// ==========================================
-// ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ
-// ==========================================
-
-app.get("/api/auth/me", auth, (req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-
-  const user = db.prepare(`
-    SELECT id, name, email, role, created_at, is_blocked
-    FROM users WHERE id = ?
-  `).get(req.user.id);
-
-  if (!user) {
-    return res.status(401).json({
-      error: "Аккаунт не найден."
-    });
-  }
-
-  res.json({
-    user: publicUser(user)
-  });
-});
 
 // ==========================================
-// ВЫХОД
+// CURRENT USER
 // ==========================================
 
-app.post("/api/auth/logout", (req, res) => {
-  const token = cookieToken(req);
-
-  if (token) {
-    db.prepare("DELETE FROM sessions WHERE token_hash = ?")
-      .run(hashToken(token));
-  }
-
-  clearSessionCookie(res, req);
-
-  res.json({
-    success: true
-  });
-});
-
-db.prepare("DELETE FROM sessions WHERE expires_at <= ?")
-  .run(Date.now());
-
-// ==========================================
-// АДМИН-ПАНЕЛЬ
-// ==========================================
-
-app.get("/api/admin/stats", auth, requireOwner, (req, res) => {
-  const stats = db.prepare(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN role = 'FREE' THEN 1 ELSE 0 END) AS free,
-      SUM(CASE WHEN role = 'PRO' THEN 1 ELSE 0 END) AS pro,
-      SUM(CASE WHEN role = 'OWNER' THEN 1 ELSE 0 END) AS owners,
-      SUM(CASE WHEN is_blocked = 1 THEN 1 ELSE 0 END) AS blocked
-    FROM users
-  `).get();
-
-  res.json(stats);
-});
-
-app.get("/api/admin/users", auth, requireOwner, (req, res) => {
-  const search = String(req.query.search || "").trim();
-
-  const users = db.prepare(`
-    SELECT id, name, email, role, is_blocked, created_at
-    FROM users
-    WHERE name LIKE ? OR email LIKE ?
-    ORDER BY created_at DESC
-    LIMIT 200
-  `).all(`%${search}%`, `%${search}%`);
-
-  res.json(users);
-});
-
-app.patch("/api/admin/users/:id", auth, requireOwner, (req, res) => {
-  const id = String(req.params.id);
-
-  const target = db.prepare(
-    "SELECT * FROM users WHERE id = ?"
-  ).get(id);
-
-  if (!target) {
-    return res.status(404).json({
-      error: "Пользователь не найден."
-    });
-  }
-
-  if (target.role === "OWNER" || target.id === req.user.id) {
-    return res.status(403).json({
-      error: "Нельзя изменять аккаунт владельца."
-    });
-  }
-
-  const updates = {};
-
-  if (req.body.role !== undefined) {
-    if (!["FREE", "PRO"].includes(req.body.role)) {
-      return res.status(400).json({
-        error: "Можно назначить только FREE или PRO."
-      });
-    }
-
-    updates.role = req.body.role;
-  }
-
-  if (req.body.is_blocked !== undefined) {
-    if (typeof req.body.is_blocked !== "boolean") {
-      return res.status(400).json({
-        error: "Некорректное значение блокировки."
-      });
-    }
-
-    updates.is_blocked = req.body.is_blocked ? 1 : 0;
-  }
-
-  if (!Object.keys(updates).length) {
-    return res.status(400).json({
-      error: "Нет изменений."
-    });
-  }
-
-  const keys = Object.keys(updates);
-  const set = keys.map(key => `${key} = @${key}`).join(", ");
-
-  db.prepare(`UPDATE users SET ${set} WHERE id = ?`)
-    .run({ ...updates, id });
-
-  if (updates.is_blocked === 1) {
-    db.prepare("DELETE FROM sessions WHERE user_id = ?")
-      .run(id);
-  }
-
-  const updated = db.prepare(`
-    SELECT id, name, email, role, is_blocked, created_at
-    FROM users WHERE id = ?
-  `).get(id);
-
-  res.json({
-    success: true,
-    user: updated
-  });
-});
-// ==========================================
-// УПРАВЛЕНИЕ GEMINI API-КЛЮЧАМИ
-// ==========================================
-
-app.get("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-
+app.get("/api/auth/me", auth, async (req, res) => {
   try {
-    const keys = getGeminiKeys().map(key => ({
-      id: key.id,
-      active: isKeyActive(key),
-      status: key.status || null,
-      created_at: key.created_at || null,
-      last_used_at: key.last_used_at || null,
-      last_error: key.last_error || null
-    }));
+    res.setHeader("Cache-Control", "no-store");
+
+    const result = await pool.query(`
+      SELECT id, name, email, role, created_at, is_blocked
+      FROM users
+      WHERE id = $1
+    `, [req.user.id]);
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(401).json({
+        error: "Аккаунт не найден."
+      });
+    }
+
+    res.json({
+      user: publicUser(user)
+    });
+
+  } catch (error) {
+    console.error("Current user error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить данные пользователя."
+    });
+  }
+});
+
+
+// ==========================================
+// LOGOUT
+// ==========================================
+
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const token = cookieToken(req);
+
+    if (token) {
+      await pool.query(
+        "DELETE FROM sessions WHERE token_hash = $1",
+        [hashToken(token)]
+      );
+    }
+
+    clearSessionCookie(res, req);
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error("Logout error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось завершить сессию."
+    });
+  }
+});
+
+
+// ==========================================
+// ADMIN
+// ==========================================
+
+app.get("/api/admin/stats", auth, requireOwner, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE role = 'FREE') AS free,
+        COUNT(*) FILTER (WHERE role = 'PRO') AS pro,
+        COUNT(*) FILTER (WHERE role = 'OWNER') AS owners,
+        COUNT(*) FILTER (WHERE is_blocked = 1) AS blocked
+      FROM users
+    `);
+
+    res.json(result.rows[0]);
+
+  } catch (error) {
+    console.error("Admin stats error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить статистику."
+    });
+  }
+});
+
+app.get("/api/admin/users", auth, requireOwner, async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+
+    const result = await pool.query(`
+      SELECT id, name, email, role, is_blocked, created_at
+      FROM users
+      WHERE name ILIKE $1 OR email ILIKE $1
+      ORDER BY created_at DESC
+      LIMIT 200
+    `, [`%${search}%`]);
+
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error("Admin users error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить пользователей."
+    });
+  }
+});
+
+app.patch("/api/admin/users/:id", auth, requireOwner, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+
+    const targetResult = await pool.query(
+      "SELECT * FROM users WHERE id = $1",
+      [id]
+    );
+
+    const target = targetResult.rows[0];
+
+    if (!target) {
+      return res.status(404).json({
+        error: "Пользователь не найден."
+      });
+    }
+
+    if (target.role === "OWNER" || target.id === req.user.id) {
+      return res.status(403).json({
+        error: "Нельзя изменять аккаунт владельца."
+      });
+    }
+
+    const updates = {};
+
+    if (req.body.role !== undefined) {
+      if (!["FREE", "PRO"].includes(req.body.role)) {
+        return res.status(400).json({
+          error: "Можно назначить только FREE или PRO."
+        });
+      }
+
+      updates.role = req.body.role;
+    }
+
+    if (req.body.is_blocked !== undefined) {
+      if (typeof req.body.is_blocked !== "boolean") {
+        return res.status(400).json({
+          error: "Некорректное значение блокировки."
+        });
+      }
+
+      updates.is_blocked = req.body.is_blocked ? 1 : 0;
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({
+        error: "Нет изменений."
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      if (updates.role !== undefined) {
+        await client.query(
+          "UPDATE users SET role = $1 WHERE id = $2",
+          [updates.role, id]
+        );
+      }
+
+      if (updates.is_blocked !== undefined) {
+        await client.query(
+          "UPDATE users SET is_blocked = $1 WHERE id = $2",
+          [updates.is_blocked, id]
+        );
+
+        if (updates.is_blocked === 1) {
+          await client.query(
+            "DELETE FROM sessions WHERE user_id = $1",
+            [id]
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const updated = await pool.query(`
+      SELECT id, name, email, role, is_blocked, created_at
+      FROM users
+      WHERE id = $1
+    `, [id]);
 
     res.json({
       success: true,
-      total: keys.length,
-      active: keys.filter(key => key.active).length,
-      keys
+      user: updated.rows[0]
     });
 
   } catch (error) {
-    console.error("Gemini keys list error:", error.message);
+    console.error("Admin user update error:", error.message);
 
     res.status(500).json({
-      error: "Не удалось получить список API-ключей."
+      error: "Не удалось изменить пользователя."
     });
   }
 });
 
-app.post("/api/admin/gemini-keys", auth, requireOwner, (req, res) => {
-  try {
-    const apiKey = typeof req.body.apiKey === "string"
-      ? req.body.apiKey.trim()
-      : "";
 
-    if (!apiKey || apiKey.length < 10 || apiKey.length > 500) {
-      return res.status(400).json({
-        error: "Укажи корректный Gemini API-ключ."
+// ==========================================
+// GEMINI API KEY MANAGEMENT
+// ==========================================
+
+app.get(
+  "/api/admin/gemini-keys",
+  auth,
+  requireOwner,
+  async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+
+      const keys = await getGeminiKeys();
+
+      const safeKeys = keys.map(key => ({
+        id: key.id,
+        masked_key: key.masked_key,
+        active: isKeyActive(key),
+        is_active: key.is_active,
+        usage_count: key.usage_count,
+        error_count: key.error_count,
+        last_used: key.last_used,
+        last_error: key.last_error,
+        cooldown_until: key.cooldown_until,
+        created_at: key.created_at
+      }));
+
+      res.json({
+        success: true,
+        total: safeKeys.length,
+        active: safeKeys.filter(key => key.active).length,
+        keys: safeKeys
+      });
+
+    } catch (error) {
+      console.error("Gemini keys list error:", error.message);
+
+      res.status(500).json({
+        error: "Не удалось получить список API-ключей."
       });
     }
-
-    const result = insertKey(db, apiKey);
-
-    res.status(201).json({
-      success: true,
-      message: "API-ключ добавлен.",
-      key: result
-    });
-
-  } catch (error) {
-    console.error("Gemini key insert error:", error.message);
-
-    res.status(400).json({
-      error: "Не удалось добавить ключ. Проверь его или попробуй другой."
-    });
   }
-});
+);
+
+app.post(
+  "/api/admin/gemini-keys",
+  auth,
+  requireOwner,
+  async (req, res) => {
+    try {
+      const apiKey = typeof req.body.apiKey === "string"
+        ? req.body.apiKey.trim()
+        : "";
+
+      if (!apiKey || apiKey.length < 10 || apiKey.length > 500) {
+        return res.status(400).json({
+          error: "Укажи корректный Gemini API-ключ."
+        });
+      }
+
+      const result = await insertKey(pool, apiKey);
+
+      res.status(201).json({
+        success: true,
+        message: "API-ключ добавлен.",
+        key: result
+      });
+
+    } catch (error) {
+      console.error("Gemini key insert error:", error.message);
+
+      res.status(400).json({
+        error: error.message === "Этот API-ключ уже добавлен."
+          ? error.message
+          : "Не удалось добавить ключ. Проверь его или попробуй другой."
+      });
+    }
+  }
+);
 
 app.patch(
   "/api/admin/gemini-keys/:id/toggle",
   auth,
   requireOwner,
-  (req, res) => {
+  async (req, res) => {
     try {
-      const result = toggleKeyActive(db, req.params.id);
+      const result = await toggleKeyActive(pool, req.params.id);
 
-      if (!result || result.changes === 0) {
+      if (!result || result.rowCount === 0) {
         return res.status(404).json({
           error: "API-ключ не найден."
         });
@@ -1236,11 +1367,11 @@ app.delete(
   "/api/admin/gemini-keys/:id",
   auth,
   requireOwner,
-  (req, res) => {
+  async (req, res) => {
     try {
-      const result = deleteKey(db, req.params.id);
+      const result = await deleteKey(pool, req.params.id);
 
-      if (!result || result.changes === 0) {
+      if (!result || result.rowCount === 0) {
         return res.status(404).json({
           error: "API-ключ не найден."
         });
@@ -1261,71 +1392,75 @@ app.delete(
   }
 );
 
+
 // ==========================================
-// ЛИМИТЫ И ИСПОЛЬЗОВАНИЕ
+// USAGE AND LIMITS
 // ==========================================
 
-function getUsage(userId) {
-  return db.prepare(`
+async function getUsage(userId) {
+  const result = await pool.query(`
     SELECT messages, images, files
     FROM daily_usage
-    WHERE user_id = ? AND usage_date = ?
-  `).get(userId, usageDate()) || {
+    WHERE user_id = $1 AND usage_date = $2
+  `, [userId, usageDate()]);
+
+  return result.rows[0] || {
     messages: 0,
     images: 0,
     files: 0
   };
 }
 
-function reserveCounter(userId, counter, amount, limit) {
+async function reserveCounter(userId, counter, amount, limit) {
   if (limit === Infinity) return true;
-
-  const date = usageDate();
-  const current = getUsage(userId);
-
-  if (current[counter] + amount > limit) return false;
 
   const allowedColumns = ["messages", "images", "files"];
 
   if (!allowedColumns.includes(counter)) return false;
 
-  db.prepare(`
-    INSERT INTO daily_usage
-      (user_id, usage_date, messages, images, files)
-    VALUES (?, ?, 0, 0, 0)
-    ON CONFLICT(user_id, usage_date) DO NOTHING
-  `).run(userId, date);
+  const date = usageDate();
 
-  db.prepare(`
-    UPDATE daily_usage
-    SET ${counter} = ${counter} + ?
-    WHERE user_id = ? AND usage_date = ?
-  `).run(amount, userId, date);
+  const result = await pool.query(`
+    INSERT INTO daily_usage (
+      user_id, usage_date, messages, images, files
+    )
+    VALUES (
+      $1, $2,
+      CASE WHEN $3 = 'messages' THEN $4 ELSE 0 END,
+      CASE WHEN $3 = 'images' THEN $4 ELSE 0 END,
+      CASE WHEN $3 = 'files' THEN $4 ELSE 0 END
+    )
+    ON CONFLICT (user_id, usage_date)
+    DO UPDATE SET
+      ${counter} = daily_usage.${counter} + $4
+    WHERE daily_usage.${counter} + $4 <= $5
+    RETURNING ${counter}
+  `, [userId, date, counter, amount, limit]);
 
-  return true;
+  return result.rowCount === 1;
 }
 
-function releaseCounter(userId, counter, amount = 1) {
+async function releaseCounter(userId, counter, amount = 1) {
   if (!["messages", "images", "files"].includes(counter)) return;
 
-  db.prepare(`
+  await pool.query(`
     UPDATE daily_usage
-    SET ${counter} = MAX(0, ${counter} - ?)
-    WHERE user_id = ? AND usage_date = ?
-  `).run(amount, userId, usageDate());
+    SET ${counter} = GREATEST(0, ${counter} - $1)
+    WHERE user_id = $2 AND usage_date = $3
+  `, [amount, userId, usageDate()]);
 }
 
-const reserveMessage = db.transaction(userId => {
+async function reserveMessage(userId) {
   return reserveCounter(
     userId,
     "messages",
     1,
     LIMITS.FREE.messages
   );
-});
+}
 
-function releaseMessage(userId) {
-  releaseCounter(userId, "messages", 1);
+async function releaseMessage(userId) {
+  return releaseCounter(userId, "messages", 1);
 }
 
 function limitsFor(user) {
@@ -1340,29 +1475,43 @@ function serializableLimits(limits) {
   };
 }
 
+
 // ==========================================
-// СТАТУС
+// STATUS
 // ==========================================
 
-app.get("/api/status", (req, res) => {
-  const keys = getGeminiKeys();
-  const activeKeys = keys.filter(isKeyActive).length;
+app.get("/api/status", async (req, res) => {
+  try {
+    const keys = await getGeminiKeys();
+    const activeKeys = keys.filter(isKeyActive).length;
 
-  res.json({
-    name: "Pinsk AI",
-    server: "online",
-    model: MODEL,
-    imageModel: IMAGE_MODEL,
-    apiKeyConfigured: activeKeys > 0,
-    geminiKeysTotal: keys.length,
-    geminiKeysActive: activeKeys,
-    uploadsEnabled: true,
-   imageGenerationEnabled: true
-  });
+    res.json({
+      name: "Pinsk AI",
+      server: "online",
+      database: "postgresql",
+      model: MODEL,
+      imageModel: IMAGE_MODEL,
+      apiKeyConfigured: activeKeys > 0,
+      geminiKeysTotal: keys.length,
+      geminiKeysActive: activeKeys,
+      uploadsEnabled: true,
+      imageGenerationEnabled: true
+    });
+
+  } catch (error) {
+    console.error("Status error:", error.message);
+
+    res.status(503).json({
+      name: "Pinsk AI",
+      server: "degraded",
+      database: "unavailable"
+    });
+  }
 });
 
+
 // ==========================================
-// ТАРИФЫ
+// PLANS
 // ==========================================
 
 app.get("/api/plans", (req, res) => {
@@ -1401,30 +1550,41 @@ app.get("/api/limits", auth, (req, res) => {
   });
 });
 
-app.get("/api/usage", auth, (req, res) => {
-  const used = getUsage(req.user.id);
-  const limits = limitsFor(req.user);
+app.get("/api/usage", auth, async (req, res) => {
+  try {
+    const used = await getUsage(req.user.id);
+    const limits = limitsFor(req.user);
 
-  res.json({
-    plan: req.user.role,
-    date: usageDate(),
-    used,
-    limits: serializableLimits(limits),
-    remaining: {
-      messages: limits.messages === Infinity
-        ? "unlimited"
-        : Math.max(0, limits.messages - used.messages),
-      images: limits.images === Infinity
-        ? "unlimited"
-        : Math.max(0, limits.images - used.images),
-      files: limits.files === Infinity
-        ? "unlimited"
-        : Math.max(0, limits.files - used.files)
-    }
-  });
+    res.json({
+      plan: req.user.role,
+      date: usageDate(),
+      used,
+      limits: serializableLimits(limits),
+      remaining: {
+        messages: limits.messages === Infinity
+          ? "unlimited"
+          : Math.max(0, limits.messages - used.messages),
+        images: limits.images === Infinity
+          ? "unlimited"
+          : Math.max(0, limits.images - used.images),
+        files: limits.files === Infinity
+          ? "unlimited"
+          : Math.max(0, limits.files - used.files)
+      }
+    });
+
+  } catch (error) {
+    console.error("Usage error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить использование."
+    });
+  }
 });
+
+
 // ==========================================
-// ПЛАГИНЫ
+// PLUGINS
 // ==========================================
 
 app.get("/api/plugins", auth, (req, res) => {
@@ -1452,85 +1612,139 @@ app.get("/api/plugins", auth, (req, res) => {
   });
 });
 
+
 // ==========================================
-// ИСТОРИЯ ЧАТОВ
+// CHAT HISTORY
 // ==========================================
 
-app.get("/api/history", auth, (req, res) => {
-  res.json(db.prepare(`
-    SELECT id, title, created_at
-    FROM conversations
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-  `).all(req.user.id));
-});
+app.get("/api/history", auth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, title, created_at
+      FROM conversations
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `, [req.user.id]);
 
-app.get("/api/history/:id", auth, (req, res) => {
-  const conversation = db.prepare(`
-    SELECT id FROM conversations
-    WHERE id = ? AND user_id = ?
-  `).get(req.params.id, req.user.id);
+    res.json(result.rows);
 
-  if (!conversation) {
-    return res.status(404).json({
-      error: "Чат не найден."
+  } catch (error) {
+    console.error("History error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить историю."
     });
   }
-
-  res.json(db.prepare(`
-    SELECT role, content, created_at
-    FROM messages
-    WHERE conversation_id = ?
-    ORDER BY id ASC
-  `).all(req.params.id));
 });
 
-// ==========================================
-// ПАМЯТЬ
-// ==========================================
+app.get("/api/history/:id", auth, async (req, res) => {
+  try {
+    const conversation = await pool.query(`
+      SELECT id
+      FROM conversations
+      WHERE id = $1 AND user_id = $2
+    `, [req.params.id, req.user.id]);
 
-app.post("/api/memory", auth, (req, res) => {
-  const content = String(req.body.content || "").trim();
+    if (!conversation.rows.length) {
+      return res.status(404).json({
+        error: "Чат не найден."
+      });
+    }
 
-  if (!content) {
-    return res.status(400).json({
-      error: "Пустая память."
+    const result = await pool.query(`
+      SELECT role, content, created_at
+      FROM messages
+      WHERE conversation_id = $1
+      ORDER BY id ASC
+    `, [req.params.id]);
+
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error("History detail error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить сообщения."
     });
   }
-
-  const result = db.prepare(`
-    INSERT INTO memories (user_id, content)
-    VALUES (?, ?)
-  `).run(req.user.id, content);
-
-  res.json({
-    success: true,
-    id: result.lastInsertRowid
-  });
 });
 
-app.get("/api/memory", auth, (req, res) => {
-  res.json(db.prepare(`
-    SELECT id, content, created_at
-    FROM memories
-    WHERE user_id = ?
-    ORDER BY id DESC
-  `).all(req.user.id));
-});
-
-app.delete("/api/memory/:id", auth, (req, res) => {
-  db.prepare(`
-    DELETE FROM memories
-    WHERE id = ? AND user_id = ?
-  `).run(req.params.id, req.user.id);
-
-  res.json({
-    success: true
-  });
-});
 
 // ==========================================
-// GEMINI API: ОБЩИЕ ФУНКЦИИ
+// MEMORY
+// ==========================================
+
+app.post("/api/memory", auth, async (req, res) => {
+  try {
+    const content = String(req.body.content || "").trim();
+
+    if (!content) {
+      return res.status(400).json({
+        error: "Пустая память."
+      });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO memories (user_id, content)
+      VALUES ($1, $2)
+      RETURNING id
+    `, [req.user.id, content]);
+
+    res.json({
+      success: true,
+      id: result.rows[0].id
+    });
+
+  } catch (error) {
+    console.error("Memory insert error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось сохранить память."
+    });
+  }
+});
+
+app.get("/api/memory", auth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, content, created_at
+      FROM memories
+      WHERE user_id = $1
+      ORDER BY id DESC
+    `, [req.user.id]);
+
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error("Memory list error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось получить память."
+    });
+  }
+});
+
+app.delete("/api/memory/:id", auth, async (req, res) => {
+  try {
+    await pool.query(`
+      DELETE FROM memories
+      WHERE id = $1 AND user_id = $2
+    `, [req.params.id, req.user.id]);
+
+    res.json({ success: true });
+
+  } catch (error) {
+    console.error("Memory delete error:", error.message);
+
+    res.status(500).json({
+      error: "Не удалось удалить память."
+    });
+  }
+});
+
+
+// ==========================================
+// GEMINI API
 // ==========================================
 
 function makeGeminiSignal(managerSignal) {
@@ -1623,6 +1837,7 @@ function convertMessagesToGemini(messages) {
 
   return result;
 }
+
 async function readGeminiResponse(response) {
   let data;
 
@@ -1649,7 +1864,7 @@ async function askAI(messages) {
   const requestBody = convertMessagesToGemini(messages);
 
   return executeWithKeyRotation(
-    db,
+    pool,
     async (apiKey, { signal }) => {
       const endpoint =
         `https://generativelanguage.googleapis.com/v1beta/models/` +
@@ -1678,8 +1893,9 @@ async function askAI(messages) {
   );
 }
 
+
 // ==========================================
-// ЧАТ С ФАЙЛАМИ И ИЗОБРАЖЕНИЯМИ
+// CHAT WITH FILES AND IMAGES
 // ==========================================
 
 app.post(
@@ -1695,7 +1911,7 @@ app.post(
     const files = req.files || [];
 
     try {
-      if (!hasActiveGeminiKeys()) {
+      if (!(await hasActiveGeminiKeys())) {
         return res.status(503).json({
           error: "Нет активных Gemini API-ключей. Обратись к владельцу Pinsk."
         });
@@ -1733,21 +1949,23 @@ app.post(
       const limits = limitsFor(req.user);
 
       if (limits.messages !== Infinity) {
-        messageReserved = reserveMessage(userId);
+        messageReserved = await reserveMessage(userId);
 
         if (!messageReserved) {
+          const usage = await getUsage(userId);
+
           return res.status(429).json({
             error: "Дневной лимит сообщений исчерпан.",
             code: "DAILY_LIMIT_REACHED",
             plan: req.user.role,
-            used: getUsage(userId).messages,
+            used: usage.messages,
             limit: limits.messages
           });
         }
       }
 
       if (files.length > 0 && limits.files !== Infinity) {
-        filesReserved = reserveCounter(
+        filesReserved = await reserveCounter(
           userId,
           "files",
           files.length,
@@ -1755,35 +1973,49 @@ app.post(
         );
 
         if (!filesReserved) {
-          if (messageReserved) releaseMessage(userId);
+          if (messageReserved) await releaseMessage(userId);
+
+          const usage = await getUsage(userId);
 
           return res.status(429).json({
             error: "Дневной лимит файлов исчерпан.",
             code: "FILE_LIMIT_REACHED",
-            used: getUsage(userId).files,
+            used: usage.files,
             limit: limits.files
           });
         }
       }
 
-      const conversation = db.prepare(`
+      const conversationResult = await pool.query(`
         SELECT id, user_id
         FROM conversations
-        WHERE id = ?
-      `).get(conversationId);
+        WHERE id = $1
+      `, [conversationId]);
+
+      const conversation = conversationResult.rows[0];
 
       if (conversation && conversation.user_id !== userId) {
         if (conversation.user_id === null) {
-          db.prepare(`
+          const claimed = await pool.query(`
             UPDATE conversations
-            SET user_id = ?
-            WHERE id = ?
-          `).run(userId, conversationId);
-        } else {
-          if (messageReserved) releaseMessage(userId);
+            SET user_id = $1
+            WHERE id = $2 AND user_id IS NULL
+          `, [userId, conversationId]);
 
+          if (claimed.rowCount !== 1) {
+            if (messageReserved) await releaseMessage(userId);
+            if (filesReserved) {
+              await releaseCounter(userId, "files", files.length);
+            }
+
+            return res.status(403).json({
+              error: "Нет доступа к этому чату."
+            });
+          }
+        } else {
+          if (messageReserved) await releaseMessage(userId);
           if (filesReserved) {
-            releaseCounter(userId, "files", files.length);
+            await releaseCounter(userId, "files", files.length);
           }
 
           return res.status(403).json({
@@ -1793,14 +2025,14 @@ app.post(
       }
 
       if (!conversation) {
-        db.prepare(`
+        await pool.query(`
           INSERT INTO conversations (id, title, user_id)
-          VALUES (?, ?, ?)
-        `).run(
+          VALUES ($1, $2, $3)
+        `, [
           conversationId,
           (message || "Прикреплённые файлы").slice(0, 60),
           userId
-        );
+        ]);
       }
 
       const fileParts = [];
@@ -1845,28 +2077,30 @@ app.post(
         message || "Проанализируй прикреплённые файлы."
       ) + attachmentText;
 
-      db.prepare(`
+      await pool.query(`
         INSERT INTO messages (conversation_id, role, content)
-        VALUES (?, 'user', ?)
-      `).run(conversationId, userContent);
+        VALUES ($1, 'user', $2)
+      `, [conversationId, userContent]);
 
-      const recentMessages = db.prepare(`
+      const recentResult = await pool.query(`
         SELECT role, content
         FROM messages
-        WHERE conversation_id = ?
+        WHERE conversation_id = $1
         ORDER BY id DESC
         LIMIT 15
-      `).all(conversationId).reverse();
+      `, [conversationId]);
 
-      const savedMemories = db.prepare(`
+      const recentMessages = recentResult.rows.reverse();
+
+      const memoryResult = await pool.query(`
         SELECT content
         FROM memories
-        WHERE user_id = ?
+        WHERE user_id = $1
         ORDER BY id DESC
         LIMIT 30
-      `).all(userId);
+      `, [userId]);
 
-      const context = savedMemories
+      const context = memoryResult.rows
         .map(item => item.content)
         .join("\n");
 
@@ -1902,12 +2136,12 @@ app.post(
         ...history
       ]);
 
-      db.prepare(`
+      await pool.query(`
         INSERT INTO messages (conversation_id, role, content)
-        VALUES (?, 'assistant', ?)
-      `).run(conversationId, answer);
+        VALUES ($1, 'assistant', $2)
+      `, [conversationId, answer]);
 
-      const usage = getUsage(userId);
+      const usage = await getUsage(userId);
 
       res.json({
         answer,
@@ -1929,10 +2163,13 @@ app.post(
     } catch (error) {
       console.error("Pinsk AI chat error:", error.message);
 
-      if (messageReserved) releaseMessage(userId);
+      if (messageReserved) {
+        await releaseMessage(userId).catch(() => {});
+      }
 
       if (filesReserved) {
-        releaseCounter(userId, "files", files.length);
+        await releaseCounter(userId, "files", files.length)
+          .catch(() => {});
       }
 
       const status = error instanceof multer.MulterError
@@ -1949,6 +2186,11 @@ app.post(
     }
   }
 );
+
+
+// ==========================================
+// IMAGE PROMPT TRANSLATION
+// ==========================================
 
 async function translateImagePrompt(prompt) {
   const answer = await askAI([
@@ -1981,8 +2223,9 @@ async function translateImagePrompt(prompt) {
   return translated.slice(0, 2048);
 }
 
+
 // ==========================================
-// ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ AI HORDE
+// AI HORDE IMAGE GENERATION
 // ==========================================
 
 async function generateHordeImage(prompt) {
@@ -1990,7 +2233,7 @@ async function generateHordeImage(prompt) {
 
   const headers = {
     "Content-Type": "application/json",
-    "apikey": apiKey,
+    apikey: apiKey,
     "Client-Agent": "PinskAI:1.0:artamonovzahar466@gmail.com"
   };
 
@@ -2031,7 +2274,6 @@ async function generateHordeImage(prompt) {
   }
 
   const requestId = submitData.id;
-
   let finished = false;
 
   for (let attempt = 0; attempt < 108; attempt++) {
@@ -2109,7 +2351,8 @@ async function generateHordeImage(prompt) {
     throw new Error("Не удалось загрузить готовое изображение AI Horde.");
   }
 
-  const contentType = imageResponse.headers.get("content-type") || "image/png";
+  const contentType = imageResponse.headers.get("content-type") ||
+    "image/png";
 
   if (!contentType.startsWith("image/")) {
     throw new Error("AI Horde вернул файл неподдерживаемого формата.");
@@ -2151,7 +2394,7 @@ async function imageGenerationHandler(req, res) {
     const limits = limitsFor(req.user);
 
     if (limits.images !== Infinity) {
-      reserved = reserveCounter(
+      reserved = await reserveCounter(
         req.user.id,
         "images",
         1,
@@ -2159,10 +2402,12 @@ async function imageGenerationHandler(req, res) {
       );
 
       if (!reserved) {
+        const usage = await getUsage(req.user.id);
+
         return res.status(429).json({
           error: "Дневной лимит генерации изображений исчерпан.",
           code: "IMAGE_LIMIT_REACHED",
-          used: getUsage(req.user.id).images,
+          used: usage.images,
           limit: limits.images
         });
       }
@@ -2170,15 +2415,15 @@ async function imageGenerationHandler(req, res) {
 
     let imagePrompt = prompt;
 
-if (hasActiveGeminiKeys()) {
-  imagePrompt = await translateImagePrompt(prompt);
-} else if (/[А-Яа-яЁё]/.test(prompt)) {
-  throw new Error(
-    "Для перевода русского описания нужны активные Gemini API-ключи."
-  );
-}
+    if (await hasActiveGeminiKeys()) {
+      imagePrompt = await translateImagePrompt(prompt);
+    } else if (/[А-Яа-яЁё]/.test(prompt)) {
+      throw new Error(
+        "Для перевода русского описания нужны активные Gemini API-ключи."
+      );
+    }
 
-const result = await generateHordeImage(imagePrompt);
+    const result = await generateHordeImage(imagePrompt);
 
     res.json({
       success: true,
@@ -2186,14 +2431,15 @@ const result = await generateHordeImage(imagePrompt);
       image: `data:${result.mimeType};base64,${result.data}`,
       mimeType: result.mimeType,
       text: result.text,
-      usage: getUsage(req.user.id)
+      usage: await getUsage(req.user.id)
     });
 
   } catch (error) {
     console.error("AI Horde image generation error:", error.message);
 
     if (reserved) {
-      releaseCounter(req.user.id, "images", 1);
+      await releaseCounter(req.user.id, "images", 1)
+        .catch(() => {});
     }
 
     const status = error.name === "TimeoutError" || error.status === 429
@@ -2220,13 +2466,14 @@ app.post(
   imageGenerationHandler
 );
 
+
 // ==========================================
-// АНАЛИЗ ДАННЫХ
+// DATA ANALYSIS
 // ==========================================
 
 app.post("/api/analysis", auth, async (req, res) => {
   try {
-    if (!hasActiveGeminiKeys()) {
+    if (!(await hasActiveGeminiKeys())) {
       return res.status(503).json({
         error: "Нет активных Gemini API-ключей."
       });
@@ -2282,8 +2529,9 @@ app.post("/api/analysis", auth, async (req, res) => {
   }
 });
 
+
 // ==========================================
-// САЙТ
+// STATIC WEBSITE AND SECURITY
 // ==========================================
 
 app.use((req, res, next) => {
@@ -2319,7 +2567,7 @@ app.get("/", (req, res) => {
 
 
 // ==========================================
-// ОБРАБОТКА ОШИБОК
+// ERROR HANDLING
 // ==========================================
 
 app.use((error, req, res, next) => {
@@ -2344,33 +2592,66 @@ app.use((error, req, res, next) => {
   });
 });
 
+
 // ==========================================
-// ЗАПУСК
+// START SERVER
 // ==========================================
 
-app.listen(PORT, () => {
-  const keys = getGeminiKeys();
-  const activeKeys = keys.filter(isKeyActive).length;
+async function startServer() {
+  try {
+    await initializeDatabase();
 
-  console.log("================================");
-  console.log("          PINSK AI");
-  console.log("================================");
-  console.log("Порт:", PORT);
-  console.log("База данных:", DB_PATH);
-  console.log("Модель чата:", MODEL);
-  console.log("Модель изображений:", IMAGE_MODEL);
-  console.log("OWNER:", OWNER_EMAIL);
-  console.log("Gemini API-ключей:", keys.length);
-  console.log("Активных Gemini API-ключей:", activeKeys);
-  console.log("Автоматическая ротация: включена");
-  console.log("Регистрация: с подтверждением email");
-  console.log("FREE: 100 сообщений в день");
-  console.log("FREE: 5 изображений и 5 файлов в день");
-  console.log("PRO: безлимит");
-  console.log("OWNER: безлимит");
-  console.log("Загрузка файлов: включена");
-  console.log("Генерация изображений: включена");
-  console.log("Анализ данных API: включён");
-  console.log("Админ API: включён");
-  console.log("================================");
-});
+    const keys = await getGeminiKeys();
+    const activeKeys = keys.filter(isKeyActive).length;
+
+    app.listen(PORT, () => {
+      console.log("================================");
+      console.log("          PINSK AI");
+      console.log("================================");
+      console.log("Порт:", PORT);
+      console.log("База данных: Supabase PostgreSQL");
+      console.log("Модель чата:", MODEL);
+      console.log("Модель изображений:", IMAGE_MODEL);
+      console.log("OWNER:", OWNER_EMAIL);
+      console.log("Gemini API-ключей:", keys.length);
+      console.log("Активных Gemini API-ключей:", activeKeys);
+      console.log("Автоматическая ротация: включена");
+      console.log("Регистрация: с подтверждением email");
+      console.log("FREE: 100 сообщений в день");
+      console.log("FREE: 5 изображений и 5 файлов в день");
+      console.log("PRO: безлимит");
+      console.log("OWNER: безлимит");
+      console.log("Загрузка файлов: включена");
+      console.log("Генерация изображений: включена");
+      console.log("Анализ данных API: включён");
+      console.log("Админ API: включён");
+      console.log("================================");
+    });
+
+  } catch (error) {
+    console.error("Pinsk startup error:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+
+// ==========================================
+// GRACEFUL SHUTDOWN
+// ==========================================
+
+async function shutdown(signal) {
+  console.log(`Pinsk: получен сигнал ${signal}, остановка...`);
+
+  try {
+    await pool.end();
+    process.exit(0);
+  } catch (error) {
+    console.error("Shutdown error:", error.message);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
