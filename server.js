@@ -510,7 +510,23 @@ function isKeyActive(key) {
 }
 
 async function getGeminiKeys() {
-  return getAllKeys(pool);
+  const result = await getAllKeys(pool);
+
+  if (Array.isArray(result)) {
+    return result;
+  }
+
+  if (Array.isArray(result?.rows)) {
+    return result.rows;
+  }
+
+  console.error(
+    "Pinsk: getAllKeys вернул неожиданный результат:",
+    typeof result,
+    result
+  );
+
+  return [];
 }
 
 async function hasActiveGeminiKeys() {
