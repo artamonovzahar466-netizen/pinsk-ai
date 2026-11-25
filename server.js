@@ -2168,7 +2168,17 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateHordeImage(prompt);
+    let imagePrompt = prompt;
+
+if (hasActiveGeminiKeys()) {
+  imagePrompt = await translateImagePrompt(prompt);
+} else if (/[А-Яа-яЁё]/.test(prompt)) {
+  throw new Error(
+    "Для перевода русского описания нужны активные Gemini API-ключи."
+  );
+}
+
+const result = await generateHordeImage(imagePrompt);
 
     res.json({
       success: true,
