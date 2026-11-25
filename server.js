@@ -2393,7 +2393,7 @@ async function imageGenerationHandler(req, res) {
         limits.images
       );
 
-      if (!reserved) {
+            if (!reserved) {
         const usage = await getUsage(req.user.id);
 
         return res.status(429).json({
@@ -2403,8 +2403,9 @@ async function imageGenerationHandler(req, res) {
           limit: limits.images
         });
       }
-    
-     const imagePrompt = await translateImagePrompt(prompt);
+    }
+
+    const imagePrompt = await translateImagePrompt(prompt);
 
     const result = await generateHordeImage(imagePrompt);
 
