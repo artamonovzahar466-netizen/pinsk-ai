@@ -361,6 +361,7 @@ function closeModal() {
   $("modalBackdrop")?.classList.remove("active");
   $("modal")?.classList.remove("active");
 }
+
 /* =========================================
    АВТОРИЗАЦИЯ
    ========================================= */
@@ -517,7 +518,6 @@ function showEmailVerification(email) {
   });
 }
 
-
 function showAuth(mode = "login") {
   const register = mode === "register";
 
@@ -593,7 +593,6 @@ function showAuth(mode = "login") {
         }
       );
 
-      // Регистрация требует подтверждения email.
       if (register && data.verificationRequired) {
         showEmailVerification(data.email || email);
         return;
@@ -638,7 +637,6 @@ function showAuth(mode = "login") {
   });
 }
 
-
 async function checkAuth() {
   try {
     const data = await api("/api/auth/me");
@@ -668,7 +666,6 @@ async function checkAuth() {
   }
 }
 
-
 async function logout() {
   try {
     await api("/api/auth/logout", {
@@ -688,7 +685,6 @@ async function logout() {
   updateProfile();
   showAuth("login");
 }
-
 
 /* =========================================
    ПРОФИЛЬ И OWNER
@@ -886,6 +882,122 @@ function clearSelectedFiles() {
   if ($("fileInput")) $("fileInput").value = "";
 
   renderAttachmentPreview();
+}
+
+/* =========================================
+   DRAG & DROP — ПЕРЕТАСКИВАНИЕ ФАЙЛОВ
+   ========================================= */
+
+function installDragAndDrop() {
+  if ($("pinskDropOverlay")) return;
+
+  let dragCounter = 0;
+
+  const overlay = document.createElement("div");
+  overlay.id = "pinskDropOverlay";
+  overlay.innerHTML = `
+    <div class="pinsk-drop-content">
+      <div class="pinsk-drop-icon">📂</div>
+      <h2>Перетащите файлы сюда</h2>
+      <p>Отпустите мышь, чтобы прикрепить файлы к сообщению</p>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  function hasFiles(event) {
+    return Array.from(event.dataTransfer?.types || [])
+      .includes("Files");
+  }
+
+  function showOverlay() {
+    if (currentPage !== "chat") return;
+    if (imageMode) return;
+
+    overlay.classList.add("active");
+  }
+
+  function hideOverlay() {
+    overlay.classList.remove("active");
+  }
+
+  document.addEventListener("dragenter", event => {
+    if (!hasFiles(event)) return;
+
+    event.preventDefault();
+
+    dragCounter++;
+
+    if (currentPage === "chat" && !imageMode) {
+      showOverlay();
+    }
+  });
+
+  document.addEventListener("dragover", event => {
+    if (!hasFiles(event)) return;
+
+    event.preventDefault();
+
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+
+    if (currentPage === "chat" && !imageMode) {
+      showOverlay();
+    }
+  });
+
+  document.addEventListener("dragleave", event => {
+    if (!hasFiles(event)) return;
+
+    event.preventDefault();
+
+    dragCounter--;
+
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      hideOverlay();
+    }
+  });
+
+  document.addEventListener("drop", event => {
+    if (!hasFiles(event)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    dragCounter = 0;
+    hideOverlay();
+
+    if (currentPage !== "chat") {
+      toast("Перетащи файлы в окно чата.");
+      return;
+    }
+
+    if (imageMode) {
+      toast("Сначала выключи режим генерации изображения.");
+      return;
+    }
+
+    const files = event.dataTransfer.files;
+
+    if (!files || !files.length) return;
+
+    addSelectedFiles(files);
+
+    if (files.length) {
+      toast(
+        files.length === 1
+          ? "Файл добавлен."
+          : `Добавлено файлов: ${files.length}`
+      );
+    }
+  });
+
+  window.addEventListener("dragend", () => {
+    dragCounter = 0;
+    hideOverlay();
+  });
 }
 
 function removeSelectedFile(index) {
@@ -2135,6 +2247,49 @@ function installPinskUiFixes() {
   style.id = "pinskUiFixes";
 
   style.textContent = `
+  #pinskDropOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    align-items: center;
+    justify-content: center;
+    background: rgba(12, 10, 22, .82);
+    backdrop-filter: blur(7px);
+    pointer-events: none;
+  }
+
+  #pinskDropOverlay.active {
+    display: flex;
+  }
+
+  .pinsk-drop-content {
+    width: min(500px, calc(100% - 40px));
+    padding: 45px 25px;
+    text-align: center;
+    border: 2px dashed #9b88ff;
+    border-radius: 22px;
+    background: #211d32;
+    box-shadow: 0 0 50px #8b78ff35;
+  }
+
+  .pinsk-drop-icon {
+    font-size: 58px;
+    margin-bottom: 15px;
+  }
+
+  .pinsk-drop-content h2 {
+    margin: 0 0 12px;
+    color: #fff;
+    font-size: 23px;
+  }
+
+  .pinsk-drop-content p {
+    margin: 0;
+    color: #c2badb;
+    font-size: 14px;
+  }
+
     .auth-box label,
     .profile-modal label {
       display: block;
@@ -2567,6 +2722,10 @@ async function init() {
   console.log("Pinsk AI: запуск...");
 
   installPinskUiFixes();
+
+  // Устанавливаем обработчики перетаскивания файлов.
+  installDragAndDrop();
+
   initEvents();
   installVoiceButton();
   installImageModeButton();
