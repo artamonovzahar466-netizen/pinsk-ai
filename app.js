@@ -1,5 +1,12 @@
 
 
+
+
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -1783,8 +1790,19 @@ async function generateStudioImage(event) {
 
   button.disabled = true;
   button.textContent = "Создаю...";
-  status.textContent = "Pinsk создаёт изображение. Это может занять несколько минут.";
+  status.textContent = "Отправляю запрос и ищу свободную видеокарту...";
   result.innerHTML = "";
+
+  const startedAt = Date.now();
+  status.dataset.startedAt = String(startedAt);
+  const statusTimer = setInterval(() => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainder = String(seconds % 60).padStart(2, "0");
+    status.textContent = minutes
+      ? `Изображение создаётся. Прошло ${minutes}:${remainder}. Скорость зависит от очереди AI Horde.`
+      : `Изображение создаётся. Прошло ${seconds} сек. Скорость зависит от очереди AI Horde.`;
+  }, 1000);
 
   try {
     const data = await api("/api/images/generate", {
@@ -1811,6 +1829,8 @@ async function generateStudioImage(event) {
   } catch (error) {
     status.textContent = error.message || "Не удалось создать изображение.";
   } finally {
+    clearInterval(statusTimer);
+    delete status.dataset.startedAt;
     button.disabled = false;
     button.textContent = "✦ Создать изображение";
   }
@@ -3673,3 +3693,5 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
+⋮⋮⋮⋮
