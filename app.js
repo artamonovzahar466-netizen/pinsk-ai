@@ -42,6 +42,8 @@ let selectedAnalysisFile = null;
 let selectedFiles = [];
 let imageMode = false;
 let temporaryUrls = [];
+let studioFiles = { html: "", css: "", js: "" };
+let studioActiveTab = "html";
 
 /* =========================================
    ХРАНИЛИЩЕ
@@ -1515,6 +1517,7 @@ function renderPage(page) {
     library: "Библиотека",
     plugins: "Плагины",
     analysis: "Анализ данных",
+    studio: "Студия дизайна",
     voice: "Голосовой режим",
     plans: "Тарифы",
     admin: "Админ-панель"
@@ -1618,6 +1621,11 @@ function renderPageContent(page) {
     return;
   }
 
+  if (page === "studio") {
+    renderStudio();
+    return;
+  }
+
   if (page === "voice") {
     view.innerHTML = `
       <div class="page-content voice-page">
@@ -1651,6 +1659,262 @@ function renderPageContent(page) {
       <h2>Раздел не найден</h2>
     </div>
   `;
+}
+
+/* =========================================
+   СТУДИЯ ДИЗАЙНА
+   ========================================= */
+
+function installStudioNavigation() {
+  if (document.querySelector('[data-page="studio"]')) return;
+
+  const nav = document.querySelector("#sidebar .navigation") ||
+    document.querySelector(".navigation");
+  if (!nav) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.page = "studio";
+  button.className = "nav-item";
+  button.innerHTML = '<span aria-hidden="true">✦</span><span>Студия дизайна</span>';
+  nav.appendChild(button);
+}
+
+function renderStudio() {
+  const view = getPageView();
+  if (!view) return;
+
+  view.innerHTML = `
+    <div class="page-content studio-page">
+      <div class="studio-heading">
+        <div>
+          <h2>Студия дизайна</h2>
+          <p>Создавай изображения, макеты и полноценные сайты с помощью Pinsk AI.</p>
+        </div>
+        <span class="studio-mark">P</span>
+      </div>
+
+      <div class="studio-mode-tabs" role="tablist" aria-label="Инструменты студии">
+        <button type="button" class="studio-mode-tab active" data-studio-mode="image">✧ Генерация изображений</button>
+        <button type="button" class="studio-mode-tab" data-studio-mode="website">⌘ Создание сайтов</button>
+      </div>
+
+      <section class="studio-panel" id="studioImagePanel">
+        <div class="studio-panel-heading">
+          <div><h3>Генератор изображений</h3><p>Логотипы, баннеры, обложки, иллюстрации и рекламные материалы.</p></div>
+        </div>
+        <form id="studioImageForm" class="studio-prompt-form">
+          <label for="studioImagePrompt">Опиши, какое изображение нужно создать</label>
+          <textarea id="studioImagePrompt" maxlength="2048" rows="4" placeholder="Например: минималистичный логотип технологической компании в фиолетовых и чёрных оттенках..."></textarea>
+          <div class="studio-form-footer"><span>До 2048 символов</span><button class="primary-button" id="studioImageSubmit" type="submit">✦ Создать изображение</button></div>
+        </form>
+        <div id="studioImageStatus" class="studio-status" role="status" aria-live="polite"></div>
+        <div id="studioImageResult" class="studio-image-result"></div>
+      </section>
+
+      <section class="studio-panel" id="studioWebsitePanel" hidden>
+        <div class="studio-panel-heading">
+          <div><h3>Конструктор сайтов</h3><p>Опиши сайт — Pinsk подготовит HTML, CSS и JavaScript, а ты сможешь изменить код и посмотреть результат.</p></div>
+        </div>
+        <form id="studioWebsiteForm" class="studio-prompt-form">
+          <label for="studioWebsitePrompt">Какой сайт или интерфейс создать?</label>
+          <textarea id="studioWebsitePrompt" maxlength="5000" rows="4" placeholder="Например: современный сайт кофейни с меню, фотографиями, ценами и формой бронирования..."></textarea>
+          <div class="studio-form-footer"><span>До 5000 символов</span><button class="primary-button" id="studioWebsiteSubmit" type="submit">⌘ Сгенерировать сайт</button></div>
+        </form>
+        <div id="studioWebsiteStatus" class="studio-status" role="status" aria-live="polite"></div>
+
+        <div class="studio-workspace" id="studioWorkspace" hidden>
+          <div class="studio-editor-column">
+            <div class="studio-editor-top"><strong>Редактор кода</strong><div class="studio-file-tabs">
+              <button type="button" data-studio-file="html" class="active">HTML</button>
+              <button type="button" data-studio-file="css">CSS</button>
+              <button type="button" data-studio-file="js">JS</button>
+            </div></div>
+            <textarea id="studioCodeEditor" class="studio-code-editor" spellcheck="false" aria-label="Редактор кода"></textarea>
+            <div class="studio-editor-actions"><button type="button" class="secondary-button" id="studioUpdatePreview">↻ Обновить просмотр</button><button type="button" class="secondary-button" id="studioDownloadCurrent">↓ Скачать файл</button></div>
+            <div class="studio-download-all"><button type="button" class="primary-button" id="studioDownloadAll">Скачать проект (HTML + CSS + JS)</button></div>
+          </div>
+          <div class="studio-preview-column">
+            <div class="studio-preview-heading"><strong>Предпросмотр</strong><span>Изолированный режим</span></div>
+            <iframe id="studioPreview" title="Предпросмотр сайта" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+
+  const imagePanel = $("studioImagePanel");
+  const websitePanel = $("studioWebsitePanel");
+  const modeButtons = view.querySelectorAll("[data-studio-mode]");
+
+  modeButtons.forEach(button => button.addEventListener("click", () => {
+    const mode = button.dataset.studioMode;
+    modeButtons.forEach(item => item.classList.toggle("active", item === button));
+    imagePanel.hidden = mode !== "image";
+    websitePanel.hidden = mode !== "website";
+  }));
+
+  $("studioImageForm")?.addEventListener("submit", generateStudioImage);
+  $("studioWebsiteForm")?.addEventListener("submit", generateStudioWebsite);
+
+  view.querySelectorAll("[data-studio-file]").forEach(button => {
+    button.addEventListener("click", () => setStudioEditorTab(button.dataset.studioFile));
+  });
+
+  $("studioCodeEditor")?.addEventListener("input", () => {
+    studioFiles[studioActiveTab] = $("studioCodeEditor").value;
+  });
+  $("studioUpdatePreview")?.addEventListener("click", updateStudioPreview);
+  $("studioDownloadCurrent")?.addEventListener("click", downloadStudioCurrentFile);
+  $("studioDownloadAll")?.addEventListener("click", downloadStudioProject);
+}
+
+async function generateStudioImage(event) {
+  event.preventDefault();
+  const prompt = $("studioImagePrompt")?.value.trim() || "";
+  const status = $("studioImageStatus");
+  const result = $("studioImageResult");
+  const button = $("studioImageSubmit");
+
+  if (!prompt) {
+    status.textContent = "Сначала опиши изображение.";
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Создаю...";
+  status.textContent = "Pinsk создаёт изображение. Это может занять несколько минут.";
+  result.innerHTML = "";
+
+  try {
+    const data = await api("/api/images/generate", {
+      method: "POST",
+      body: JSON.stringify({ prompt })
+    });
+    const source = safeImageSource(data.image || data.imageUrl || data.url);
+    if (!source) throw new Error("Сервер не вернул изображение.");
+
+    const image = document.createElement("img");
+    image.src = source;
+    image.alt = "Изображение, созданное в Студии дизайна Pinsk AI";
+    image.loading = "lazy";
+    result.appendChild(image);
+
+    const download = document.createElement("a");
+    download.href = source;
+    download.download = "pinsk-studio-image.png";
+    download.className = "secondary-button studio-image-download";
+    download.textContent = "↓ Скачать изображение";
+    result.appendChild(download);
+    status.textContent = "Изображение готово.";
+    if (data.usage) usageData = data.usage;
+  } catch (error) {
+    status.textContent = error.message || "Не удалось создать изображение.";
+  } finally {
+    button.disabled = false;
+    button.textContent = "✦ Создать изображение";
+  }
+}
+
+async function generateStudioWebsite(event) {
+  event.preventDefault();
+  const prompt = $("studioWebsitePrompt")?.value.trim() || "";
+  const status = $("studioWebsiteStatus");
+  const button = $("studioWebsiteSubmit");
+  if (!prompt) {
+    status.textContent = "Опиши сайт, который нужно создать.";
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "Генерирую...";
+  status.textContent = "Pinsk проектирует интерфейс и пишет код...";
+
+  try {
+    const data = await api("/api/design/generate", {
+      method: "POST",
+      body: JSON.stringify({ prompt })
+    });
+
+    studioFiles = {
+      html: String(data.html || ""),
+      css: String(data.css || ""),
+      js: String(data.js || "")
+    };
+    if (!studioFiles.html) throw new Error("ИИ не вернул HTML-код. Попробуй уточнить запрос.");
+
+    $("studioWorkspace").hidden = false;
+    studioActiveTab = "html";
+    $("studioCodeEditor").value = studioFiles.html;
+    document.querySelectorAll("[data-studio-file]").forEach(tab => {
+      tab.classList.toggle("active", tab.dataset.studioFile === "html");
+    });
+    updateStudioPreview();
+    status.textContent = "Сайт создан. Можешь редактировать код, обновлять предпросмотр и скачивать файлы.";
+  } catch (error) {
+    status.textContent = error.message || "Не удалось создать сайт.";
+  } finally {
+    button.disabled = false;
+    button.textContent = "⌘ Сгенерировать сайт";
+  }
+}
+
+function setStudioEditorTab(file) {
+  if (!Object.prototype.hasOwnProperty.call(studioFiles, file)) return;
+  const editor = $("studioCodeEditor");
+  if (editor && studioActiveTab) studioFiles[studioActiveTab] = editor.value;
+  studioActiveTab = file;
+  if (editor) editor.value = studioFiles[file] || "";
+  document.querySelectorAll("[data-studio-file]").forEach(button => {
+    button.classList.toggle("active", button.dataset.studioFile === file);
+  });
+}
+
+function buildStudioDocument() {
+  let html = String(studioFiles.html || "");
+  const css = `<style>\n${studioFiles.css || ""}\n</style>`;
+  const js = `<script>\n${String(studioFiles.js || "").replace(/<\/script/gi, "<\\/script")}\n<\/script>`;
+
+  if (/<\/head\s*>/i.test(html)) html = html.replace(/<\/head\s*>/i, css + "</head>");
+  else html = css + html;
+
+  if (/<\/body\s*>/i.test(html)) html = html.replace(/<\/body\s*>/i, js + "</body>");
+  else html += js;
+  return html;
+}
+
+function updateStudioPreview() {
+  const editor = $("studioCodeEditor");
+  if (editor) studioFiles[studioActiveTab] = editor.value;
+  const frame = $("studioPreview");
+  if (frame) frame.srcdoc = buildStudioDocument();
+}
+
+function downloadStudioFile(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadStudioCurrentFile() {
+  const editor = $("studioCodeEditor");
+  if (editor) studioFiles[studioActiveTab] = editor.value;
+  const extensions = { html: "html", css: "css", js: "js" };
+  downloadStudioFile(`pinsk-project.${extensions[studioActiveTab]}`, studioFiles[studioActiveTab], "text/plain;charset=utf-8");
+}
+
+function downloadStudioProject() {
+  const editor = $("studioCodeEditor");
+  if (editor) studioFiles[studioActiveTab] = editor.value;
+  downloadStudioFile("index.html", buildStudioDocument(), "text/html;charset=utf-8");
+  downloadStudioFile("style.css", studioFiles.css, "text/css;charset=utf-8");
+  downloadStudioFile("script.js", studioFiles.js, "text/javascript;charset=utf-8");
 }
 
 /* =========================================
@@ -3371,6 +3635,7 @@ async function init() {
 
   // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
+  installStudioNavigation();
 
   initEvents();
   installVoiceButton();
