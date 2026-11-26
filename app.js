@@ -1,4 +1,10 @@
 
+
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -1656,37 +1662,170 @@ function renderPageContent(page) {
    ПЛАГИНЫ
    ========================================= */
 
+function openWebSearchPlugin() {
+  showModal(`
+    <div class="plugin-modal">
+      <div class="plugin-modal__icon">🌐</div>
+      <h2>Поиск в интернете</h2>
+      <p class="plugin-modal__lead">Поиск пока не подключён к серверу Pinsk AI.</p>
+      <div class="plugin-notice">
+        <strong>Что требуется для запуска</strong>
+        <p>Нужно подключить поискового провайдера на серверной стороне и сохранить его API-ключ в секретных переменных окружения Render.</p>
+        <p>Ключ нельзя размещать в браузерном коде или отправлять в открытом виде.</p>
+      </div>
+      <p class="plugin-modal__muted">Сейчас поиск не выполняется. Карточка станет рабочей после настройки серверного провайдера.</p>
+      <button type="button" class="secondary-button" id="closePluginInfo">Понятно</button>
+    </div>
+  `);
+
+  $("closePluginInfo")?.addEventListener("click", closeModal);
+}
+
+function openWorkspacePlugin() {
+  showModal(`
+    <div class="plugin-modal">
+      <div class="plugin-modal__icon">🗂️</div>
+      <h2>Рабочее пространство</h2>
+      <p class="plugin-modal__lead">Выбери, с чем хочешь продолжить работу.</p>
+      <div class="plugin-modal__actions">
+        <button type="button" class="plugin-action-button" id="openPluginProjects">
+          <span class="plugin-action-button__icon">📁</span>
+          <span><strong>Проекты</strong><small>Создавай и организуй свои проекты</small></span>
+          <span class="plugin-action-button__arrow">›</span>
+        </button>
+        <button type="button" class="plugin-action-button" id="openPluginLibrary">
+          <span class="plugin-action-button__icon">📚</span>
+          <span><strong>Библиотека</strong><small>Сохраняй важные материалы и заметки</small></span>
+          <span class="plugin-action-button__arrow">›</span>
+        </button>
+      </div>
+    </div>
+  `);
+
+  $("openPluginProjects")?.addEventListener("click", () => renderPage("projects"));
+  $("openPluginLibrary")?.addEventListener("click", () => renderPage("library"));
+}
+
 async function renderPlugins() {
   const view = getPageView();
-  if (!view) return;
+  if (!view || currentPage !== "plugins") return;
 
   view.innerHTML = `
-    <div class="page-content">
-      <h2>Плагины Pinsk</h2>
-      <p>Дополнительные инструменты и интеграции.</p>
-      <div id="pluginsList">Загрузка списка...</div>
+    <div class="page-content plugins-page">
+      <div class="plugins-heading">
+        <div>
+          <h2>Плагины Pinsk</h2>
+          <p>Дополнительные инструменты и возможности рабочего пространства.</p>
+        </div>
+        <span class="plugins-heading__label">ИНСТРУМЕНТЫ</span>
+      </div>
+      <div id="pluginsList" class="plugin-grid">
+        <div class="plugin-loading">Загружаем инструменты...</div>
+      </div>
     </div>
   `;
 
   const container = $("pluginsList");
+  if (!container) return;
+
+  const fallbackPlugins = [
+    {
+      id: "web-search",
+      name: "Поиск в интернете",
+      description: "Ищи актуальную информацию в сети и изучай источники.",
+      status: "not_connected",
+      icon: "🌐",
+      action: openWebSearchPlugin,
+      statusText: "Требуется подключение"
+    },
+    {
+      id: "data-analysis",
+      name: "Анализ данных",
+      description: "Загружай таблицы и текстовые файлы, задавай вопросы и получай выводы.",
+      status: "available",
+      icon: "📊",
+      action: () => renderPage("analysis"),
+      statusText: "Доступен"
+    },
+    {
+      id: "workspace",
+      name: "Рабочее пространство",
+      description: "Управляй проектами и сохраняй полезные материалы в библиотеке.",
+      status: "available",
+      icon: "🗂️",
+      action: openWorkspacePlugin,
+      statusText: "Доступен"
+    }
+  ];
+
+  let plugins = fallbackPlugins;
 
   try {
     const result = await api("/api/plugins");
-    const plugins = result.plugins || [];
 
-    container.innerHTML = plugins.map(plugin => `
-      <div class="dashboard-card">
-        <h3>${escapeHTML(plugin.name)}</h3>
-        <p>${escapeHTML(plugin.description)}</p>
-        <p class="plugin-status">
-          ${plugin.status === "available" ? "Доступен" : "Требуется подключение"}
-        </p>
-      </div>
-    `).join("");
+    // Не перерисовываем плагины, если пользователь уже открыл другую страницу.
+    if (currentPage !== "plugins" || $("pluginsList") !== container) return;
+
+    const serverPlugins = Array.isArray(result?.plugins) ? result.plugins : [];
+    const serverById = new Map(serverPlugins.map(plugin => [plugin.id, plugin]));
+
+    plugins = fallbackPlugins.map(fallback => {
+      const serverPlugin = serverById.get(fallback.id);
+      if (!serverPlugin) return fallback;
+
+      return {
+        ...fallback,
+        name: serverPlugin.name || fallback.name,
+        description: serverPlugin.description || fallback.description,
+        status: fallback.id === "web-search"
+          ? "not_connected"
+          : (serverPlugin.status || fallback.status),
+        statusText: fallback.id === "web-search"
+          ? "Требуется подключение"
+          : (serverPlugin.status === "available" ? "Доступен" : fallback.statusText)
+      };
+    });
 
   } catch (error) {
-    container.textContent = "Не удалось загрузить каталог: " + error.message;
+    console.warn("Не удалось загрузить каталог плагинов, используются локальные сведения:", error);
+    if (currentPage !== "plugins" || $("pluginsList") !== container) return;
   }
+
+  if (currentPage !== "plugins" || $("pluginsList") !== container) return;
+
+  container.innerHTML = "";
+
+  plugins.forEach(plugin => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "plugin-card";
+    button.dataset.pluginId = plugin.id;
+    button.setAttribute("aria-label", `${plugin.name}. ${plugin.description}`);
+
+    const statusClass = plugin.status === "available"
+      ? "plugin-status--available"
+      : "plugin-status--pending";
+
+    button.innerHTML = `
+      <span class="plugin-card__topline">
+        <span class="plugin-card__icon" aria-hidden="true">${plugin.icon}</span>
+        <span class="plugin-card__arrow" aria-hidden="true">↗</span>
+      </span>
+      <span class="plugin-card__title">${escapeHTML(plugin.name)}</span>
+      <span class="plugin-card__description">${escapeHTML(plugin.description)}</span>
+      <span class="plugin-card__meta">
+        <span class="plugin-status ${statusClass}"><span class="plugin-status__dot"></span>${escapeHTML(plugin.statusText)}</span>
+        <span class="plugin-card__open">Открыть</span>
+      </span>
+    `;
+
+    button.addEventListener("click", () => {
+      if (currentPage !== "plugins") return;
+      plugin.action();
+    });
+
+    container.appendChild(button);
+  });
 }
 
 /* =========================================
@@ -2483,6 +2622,281 @@ function installPinskUiFixes() {
       font-size: 13px;
     }
 
+    /* Карточки плагинов */
+    .plugins-page {
+      max-width: 1120px;
+    }
+
+    .plugins-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+
+    .plugins-heading h2 {
+      margin: 0 0 8px;
+    }
+
+    .plugins-heading p {
+      margin: 0;
+      color: #aaa5b8;
+      line-height: 1.55;
+    }
+
+    .plugins-heading__label {
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      border: 1px solid #514875;
+      border-radius: 999px;
+      color: #c9bfff;
+      background: #292638;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .09em;
+    }
+
+    .plugin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 245px), 1fr));
+      gap: 16px;
+    }
+
+    .plugin-card {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 0;
+      min-height: 225px;
+      padding: 19px;
+      border: 1px solid #393447;
+      border-radius: 17px;
+      color: #f2efff;
+      background: linear-gradient(145deg, #242130, #191722);
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+
+    .plugin-card:hover {
+      transform: translateY(-3px);
+      border-color: #8170dc;
+      background: linear-gradient(145deg, #2b263d, #1d1a29);
+      box-shadow: 0 12px 30px #08061055;
+    }
+
+    .plugin-card:focus-visible {
+      outline: 3px solid #a99aff;
+      outline-offset: 3px;
+    }
+
+    .plugin-card__topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .plugin-card__icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 49px;
+      height: 49px;
+      border: 1px solid #514875;
+      border-radius: 14px;
+      background: #302a45;
+      font-size: 25px;
+    }
+
+    .plugin-card__arrow {
+      color: #9588c5;
+      font-size: 21px;
+      transition: transform .18s ease;
+    }
+
+    .plugin-card:hover .plugin-card__arrow {
+      transform: translate(2px, -2px);
+    }
+
+    .plugin-card__title {
+      display: block;
+      margin-bottom: 8px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 750;
+    }
+
+    .plugin-card__description {
+      display: block;
+      flex: 1;
+      color: #aaa5b8;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .plugin-card__meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 20px;
+      padding-top: 13px;
+      border-top: 1px solid #393447;
+    }
+
+    .plugin-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #b5a8ff;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .plugin-status__dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 7px;
+      border-radius: 50%;
+      background: #d9a85b;
+    }
+
+    .plugin-status--available {
+      color: #8eddb1;
+    }
+
+    .plugin-status--available .plugin-status__dot {
+      background: #62cf91;
+      box-shadow: 0 0 9px #62cf9166;
+    }
+
+    .plugin-status--pending {
+      color: #e5bd79;
+    }
+
+    .plugin-card__open {
+      color: #c5baff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .plugin-loading {
+      grid-column: 1 / -1;
+      padding: 22px;
+      border: 1px solid #393447;
+      border-radius: 14px;
+      color: #aaa5b8;
+      background: #1d1a27;
+    }
+
+    .plugin-modal {
+      max-width: 520px;
+    }
+
+    .plugin-modal__icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 54px;
+      height: 54px;
+      margin-bottom: 14px;
+      border: 1px solid #514875;
+      border-radius: 16px;
+      background: #302a45;
+      font-size: 27px;
+    }
+
+    .plugin-modal h2 {
+      margin: 0 0 9px;
+    }
+
+    .plugin-modal__lead {
+      color: #c7c1d7;
+      line-height: 1.55;
+    }
+
+    .plugin-notice {
+      margin: 17px 0;
+      padding: 15px;
+      border: 1px solid #514875;
+      border-radius: 12px;
+      background: #242033;
+      color: #e9e4f7;
+      line-height: 1.55;
+    }
+
+    .plugin-notice p {
+      margin: 9px 0 0;
+      color: #b9b2ca;
+      font-size: 13px;
+    }
+
+    .plugin-modal__muted {
+      color: #9690a4;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .plugin-modal__actions {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .plugin-action-button {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #454052;
+      border-radius: 12px;
+      color: #f2efff;
+      background: #211e2c;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color .18s ease, background .18s ease;
+    }
+
+    .plugin-action-button:hover,
+    .plugin-action-button:focus-visible {
+      border-color: #8b78ff;
+      background: #302a45;
+      outline: none;
+    }
+
+    .plugin-action-button__icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 42px;
+      border-radius: 11px;
+      background: #39324f;
+      font-size: 21px;
+    }
+
+    .plugin-action-button strong,
+    .plugin-action-button small {
+      display: block;
+    }
+
+    .plugin-action-button small {
+      margin-top: 4px;
+      color: #aaa5b8;
+      font-size: 11px;
+    }
+
+    .plugin-action-button__arrow {
+      margin-left: auto;
+      color: #b5a8ff;
+      font-size: 24px;
+    }
+
     .page-content textarea {
       display: block;
       width: 100%;
@@ -2774,3 +3188,7 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
+
+
+
