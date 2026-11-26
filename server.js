@@ -1,5 +1,11 @@
 
 
+
+
+
+и арр
+
+
 "use strict";
 
 const express = require("express");
@@ -2448,58 +2454,68 @@ async function translateImagePrompt(prompt) {
 
   // Для русского текста используем короткий специализированный запрос,
   // а не общий askAI с лимитом ответа в 4096 токенов.
-  const answer = await executeWithKeyRotation(
-    pool,
-    async (apiKey, { signal }) => {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: {
-              parts: [{
-                text:
-                  "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
-                  "Preserve all requested objects, composition, style, colors and details. " +
-                  "Do not add anything. Return only the English prompt."
-              }]
-            },
-            contents: [{
-              role: "user",
-              parts: [{ text: source }]
-            }],
-            generationConfig: {
-              temperature: 0.1,
-              maxOutputTokens: 512
-            }
-          }),
-          signal
-        }
-      );
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const error = new Error(
-          data?.error?.message || `Gemini API вернул HTTP ${response.status}`
+  let answer;
+  try {
+    answer = await executeWithKeyRotation(
+      pool,
+      async (apiKey, { signal }) => {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{
+                  text:
+                    "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
+                    "Preserve all requested objects, composition, style, colors and details. " +
+                    "Do not add anything. Return only the English prompt."
+                }]
+              },
+              contents: [{
+                role: "user",
+                parts: [{ text: source }]
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 512
+              }
+            }),
+            signal
+          }
         );
-        error.status = response.status;
-        throw error;
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(
+            data?.error?.message || `Gemini API вернул HTTP ${response.status}`
+          );
+          error.status = response.status;
+          throw error;
+        }
+
+        const translated = (data.candidates?.[0]?.content?.parts || [])
+          .filter(part => typeof part.text === "string")
+          .map(part => part.text)
+          .join("\n")
+          .trim();
+
+        if (!translated) {
+          throw new Error("Gemini не смог перевести описание изображения.");
+        }
+
+        return translated;
       }
-
-      const translated = (data.candidates?.[0]?.content?.parts || [])
-        .filter(part => typeof part.text === "string")
-        .map(part => part.text)
-        .join("\n")
-        .trim();
-
-      if (!translated) {
-        throw new Error("Gemini не смог перевести описание изображения.");
-      }
-
-      return translated;
-    }
-  );
+    );
+  } catch (error) {
+    // Не блокируем создание изображения из-за временной перегрузки Gemini.
+    console.warn(
+      "Pinsk: перевод промпта через Gemini недоступен, отправляем исходное описание:",
+      error.message
+    );
+    return source.slice(0, 2048);
+  }
 
   const translated = String(answer || "")
     .replace(/```[\s\S]*?```/g, text => text.replace(/```/g, ""))
@@ -3025,5 +3041,3 @@ async function shutdown(signal) {
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-
-⋮⋮⋮⋮
