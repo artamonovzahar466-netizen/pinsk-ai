@@ -1659,21 +1659,128 @@ function renderPageContent(page) {
 
 function openWebSearchPlugin() {
   showModal(`
-    <div class="plugin-modal">
+    <div class="plugin-modal web-search-modal">
       <div class="plugin-modal__icon">🌐</div>
       <h2>Поиск в интернете</h2>
-      <p class="plugin-modal__lead">Поиск пока не подключён к серверу Pinsk AI.</p>
-      <div class="plugin-notice">
-        <strong>Что требуется для запуска</strong>
-        <p>Нужно подключить поискового провайдера на серверной стороне и сохранить его API-ключ в секретных переменных окружения Render.</p>
-        <p>Ключ нельзя размещать в браузерном коде или отправлять в открытом виде.</p>
-      </div>
-      <p class="plugin-modal__muted">Сейчас поиск не выполняется. Карточка станет рабочей после настройки серверного провайдера.</p>
-      <button type="button" class="secondary-button" id="closePluginInfo">Понятно</button>
+      <p class="plugin-modal__lead">Найди актуальную информацию в интернете. Pinsk покажет краткий ответ и ссылки на источники.</p>
+
+      <form id="webSearchForm" class="web-search-form">
+        <label for="webSearchQuery">Что будем искать?</label>
+        <div class="web-search-input-row">
+          <input
+            id="webSearchQuery"
+            name="query"
+            type="search"
+            maxlength="500"
+            autocomplete="off"
+            placeholder="Например: последние новости технологий"
+            required
+          >
+          <button type="submit" class="primary-button" id="webSearchSubmit">Найти</button>
+        </div>
+      </form>
+
+      <div id="webSearchStatus" class="web-search-status" role="status" aria-live="polite"></div>
+      <section id="webSearchAnswer" class="web-search-answer" aria-live="polite"></section>
+      <section id="webSearchResults" class="web-search-results"></section>
+      <p class="plugin-modal__muted">Результаты предоставляются поисковым сервисом и могут требовать дополнительной проверки по первоисточнику.</p>
     </div>
   `);
 
-  $("closePluginInfo")?.addEventListener("click", closeModal);
+  const form = $("webSearchForm");
+  const input = $("webSearchQuery");
+  const button = $("webSearchSubmit");
+  const status = $("webSearchStatus");
+  const answer = $("webSearchAnswer");
+  const results = $("webSearchResults");
+
+  input?.focus();
+
+  form?.addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const query = input?.value.trim() || "";
+    if (!query) {
+      status.textContent = "Введи поисковый запрос.";
+      input?.focus();
+      return;
+    }
+
+    if (query.length > 500) {
+      status.textContent = "Запрос не должен превышать 500 символов.";
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Ищу...";
+    status.textContent = "Ищем информацию в интернете...";
+    answer.innerHTML = "";
+    results.innerHTML = "";
+
+    try {
+      const data = await api("/api/search", {
+        method: "POST",
+        body: JSON.stringify({ query })
+      });
+
+      if (data.answer) {
+        answer.innerHTML = `<h3>Краткий ответ</h3><div class="web-search-answer__text">${renderMarkdown(data.answer)}</div>`;
+      }
+
+      const items = Array.isArray(data.results) ? data.results : [];
+      if (items.length) {
+        results.innerHTML = `<h3>Источники (${items.length})</h3>`;
+
+        items.forEach(item => {
+          let url;
+          try {
+            url = new URL(String(item.url || ""));
+          } catch {
+            return;
+          }
+
+          if (!["http:", "https:"].includes(url.protocol)) return;
+
+          const article = document.createElement("article");
+          article.className = "web-search-result";
+
+          const link = document.createElement("a");
+          link.className = "web-search-result__title";
+          link.href = url.href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = String(item.title || item.domain || url.hostname);
+
+          const domain = document.createElement("div");
+          domain.className = "web-search-result__domain";
+          domain.textContent = String(item.domain || url.hostname);
+
+          const snippet = document.createElement("p");
+          snippet.className = "web-search-result__snippet";
+          snippet.textContent = String(item.snippet || "");
+
+          article.append(link, domain);
+          if (snippet.textContent) article.appendChild(snippet);
+          results.appendChild(article);
+        });
+      }
+
+      if (!data.answer && !items.length) {
+        status.textContent = "По этому запросу ничего не найдено. Попробуй изменить формулировку.";
+      } else {
+        status.textContent = `Поиск завершён. Найдено источников: ${items.length}.`;
+      }
+
+    } catch (error) {
+      status.textContent = error.message || "Не удалось выполнить поиск.";
+      if (error.data?.code === "SEARCH_NOT_CONFIGURED") {
+        status.textContent = "Поиск пока не настроен на сервере. Владельцу нужно добавить TAVILY_API_KEY в переменные окружения Render.";
+      }
+    } finally {
+      button.disabled = false;
+      button.textContent = "Найти";
+    }
+  });
 }
 
 function openWorkspacePlugin() {
@@ -1772,12 +1879,10 @@ async function renderPlugins() {
         ...fallback,
         name: serverPlugin.name || fallback.name,
         description: serverPlugin.description || fallback.description,
-        status: fallback.id === "web-search"
-          ? "not_connected"
-          : (serverPlugin.status || fallback.status),
-        statusText: fallback.id === "web-search"
-          ? "Требуется подключение"
-          : (serverPlugin.status === "available" ? "Доступен" : fallback.statusText)
+        status: serverPlugin.status || fallback.status,
+        statusText: serverPlugin.status === "available"
+          ? "Доступен"
+          : (fallback.id === "web-search" ? "Требуется подключение" : fallback.statusText)
       };
     });
 
@@ -2839,6 +2944,126 @@ function installPinskUiFixes() {
       display: grid;
       gap: 10px;
       margin-top: 18px;
+    }
+
+    /* Интерфейс интернет-поиска */
+    .web-search-modal {
+      width: min(680px, 100%);
+      max-width: 680px;
+    }
+
+    .web-search-form {
+      margin-top: 18px;
+    }
+
+    .web-search-form label {
+      display: block;
+      margin-bottom: 8px;
+      color: #d8d5e8;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .web-search-input-row {
+      display: flex;
+      align-items: stretch;
+      gap: 9px;
+    }
+
+    .web-search-input-row input {
+      flex: 1;
+      min-width: 0;
+      margin: 0 !important;
+    }
+
+    .web-search-input-row button {
+      flex: 0 0 auto;
+      min-width: 88px;
+    }
+
+    .web-search-status {
+      margin-top: 13px;
+      color: #bdb5d1;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .web-search-answer {
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid #514875;
+      border-radius: 12px;
+      background: #242033;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+    }
+
+    .web-search-answer:empty,
+    .web-search-results:empty {
+      display: none;
+    }
+
+    .web-search-answer h3,
+    .web-search-results h3 {
+      margin: 0 0 9px;
+      color: #f2efff;
+      font-size: 15px;
+    }
+
+    .web-search-answer__text p {
+      margin: 0 0 9px;
+    }
+
+    .web-search-answer__text p:last-child {
+      margin-bottom: 0;
+    }
+
+    .web-search-results {
+      margin-top: 17px;
+    }
+
+    .web-search-result {
+      margin-top: 9px;
+      padding: 13px;
+      border: 1px solid #393447;
+      border-radius: 11px;
+      background: #1d1a27;
+    }
+
+    .web-search-result__title {
+      color: #c8bdff;
+      font-weight: 700;
+      line-height: 1.45;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+    }
+
+    .web-search-result__title:hover {
+      text-decoration: underline;
+    }
+
+    .web-search-result__domain {
+      margin-top: 4px;
+      color: #8eddb1;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+
+    .web-search-result__snippet {
+      margin: 8px 0 0;
+      color: #b9b2ca;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 520px) {
+      .web-search-input-row {
+        flex-direction: column;
+      }
+
+      .web-search-input-row button {
+        width: 100%;
+      }
     }
 
     .plugin-action-button {
