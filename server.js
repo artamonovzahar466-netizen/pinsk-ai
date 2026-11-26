@@ -2476,19 +2476,18 @@ app.post("/api/analysis", auth, async (req, res) => {
       answer
     });
 
-  } catch (error) {
-    console.error("Data analysis error:", error.message);
+ } catch (error) {
+  console.error("Data analysis error:", error.message);
 
-const status = [429, 529].includes(error.status) ? 503 : 500;
+  const status = [429, 529].includes(error.status) ? 503 : 500;
 
-res.status(status).json({
-  error: status === 503
-    ? "Claude API временно перегружен. Попробуй позже."
-    : "Не удалось выполнить анализ данных."
+  res.status(status).json({
+    error: status === 503
+      ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
+      : "Не удалось выполнить анализ данных."
+  });
+}
 });
-  }
-});
-
 
 // ==========================================
 // STATIC WEBSITE AND SECURITY
