@@ -1,161 +1,34 @@
 
-<!DOCTYPE html>
+
+<!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#101014">
-  <meta name="description" content="Pinsk AI — интеллектуальный помощник">
-  <title>Pinsk AI</title>
-
-  <link rel="icon" type="image/png" href="/favicon.png">
-  <link rel="stylesheet" href="/style.css">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pinsk AI — Студия дизайна</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10131c;color:#f5f6fa;font:15px Arial,sans-serif}
+.layout{display:grid;grid-template-columns:220px 1fr;min-height:100vh}aside{padding:24px;background:#171c29;border-right:1px solid #30394d}
+.logo{font-size:24px;font-weight:bold;margin-bottom:30px}.logo span{color:#9b87ff}
+nav button,.tab,button{cursor:pointer;border:0;border-radius:9px;padding:11px 14px;background:#292f42;color:white;margin:4px}
+nav button{display:block;width:100%;text-align:left;background:transparent}nav button.active,.tab.active{background:#5948b5}
+main{padding:28px;max-width:1500px;width:100%;margin:auto}h1{margin-top:0}.muted{color:#aab2c4}
+.tabs{margin:18px 0}.grid{display:grid;grid-template-columns:minmax(260px,380px) 1fr;gap:16px}
+.panel{background:#1b2231;border:1px solid #30394d;border-radius:14px;padding:18px}
+label{display:block;color:#aab2c4;margin:14px 0 7px}textarea,select{width:100%;padding:12px;border-radius:9px;border:1px solid #3a4358;background:#111722;color:white}
+textarea{min-height:130px;resize:vertical}.code{min-height:390px;font:12px monospace;white-space:pre}
+.primary{background:#7962ed}.preview{width:100%;height:520px;background:white;border:0;border-radius:10px;margin-top:12px}
+.hidden{display:none!important}.status{color:#aab2c4;min-height:22px;margin-top:10px}
+.result{max-width:100%;max-height:520px;object-fit:contain}.actions{display:flex;flex-wrap:wrap;gap:6px}
+@media(max-width:800px){.layout{grid-template-columns:1fr}aside{border-right:0}nav{display:flex}nav button{width:auto}.grid{grid-template-columns:1fr}main{padding:16px}}
+</style>
 </head>
 <body>
-  <div class="app">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-icon">P</div>
-        <span>Pinsk</span>
-        <span class="brand-ai">AI</span>
-      </div>
-
-      <button class="new-chat" id="newChat" type="button">＋ Новый чат</button>
-
-      <nav class="navigation">
-        <div class="nav-label">Рабочее пространство</div>
-        <button class="nav-item active" data-page="chat" type="button">✧ <span>Чат</span></button>
-        <button class="nav-item" data-page="overview" type="button">◫ <span>Обзор</span></button>
-        <button class="nav-item" data-page="projects" type="button">▦ <span>Проекты</span></button>
-        <button class="nav-item" data-page="library" type="button">▤ <span>Библиотека</span></button>
-        <button class="nav-item" data-page="plugins" type="button">⌘ <span>Плагины</span></button>
-        <button class="nav-item" data-page="analysis" type="button">▥ <span>Анализ данных</span></button>
-        <button class="nav-item" data-page="voice" type="button">◉ <span>Голосовой режим</span></button>
-      </nav>
-
-      <div class="history-section">
-        <div class="nav-label">История</div>
-        <div id="history" class="history"></div>
-      </div>
-
-      <div class="sidebar-bottom">
-        <div class="plan-card">
-          <div class="plan-top">
-            <span>Ваш тариф</span>
-            <span class="free-badge">FREE</span>
-          </div>
-          <div class="plan-description">Попробуйте возможности Pinsk PRO</div>
-          <button id="upgradeButton" class="upgrade-button" type="button">Улучшить тариф ↗</button>
-        </div>
-
-        <button class="profile" id="profileButton" type="button">
-          <div class="avatar" id="avatar">U</div>
-          <div class="profile-info">
-            <strong id="profileName">Пользователь</strong>
-            <small>Бесплатный план</small>
-          </div>
-          <span class="profile-menu">•••</span>
-        </button>
-      </div>
-    </aside>
-
-    <main class="main" id="main">
-      <header class="topbar">
-        <button class="mobile-menu" id="mobileMenu" type="button">☰</button>
-        <div class="topbar-title" id="pageTitle">Pinsk AI</div>
-        <div class="topbar-actions">
-          <button class="icon-button" id="settingsButton" title="Настройки" type="button">⚙</button>
-          <button class="top-upgrade" id="topUpgrade" type="button">Перейти на PRO ↗</button>
-        </div>
-      </header>
-
-      <section class="workspace" id="workspace">
-        <div id="pageView"></div>
-
-        <div class="welcome" id="welcome">
-          <div class="welcome-symbol">✳</div>
-          <h1>Чем могу помочь?</h1>
-          <p>Я Pinsk — ваш интеллектуальный помощник.</p>
-
-          <div class="suggestions">
-            <button class="suggestion" data-prompt="Помоги мне написать текст" type="button">
-              <span>✎</span>
-              <strong>Написать текст</strong>
-              <small>Письма, статьи и идеи</small>
-            </button>
-
-            <button class="suggestion" data-prompt="Объясни сложную тему простыми словами" type="button">
-              <span>◈</span>
-              <strong>Объяснить тему</strong>
-              <small>Понятные ответы</small>
-            </button>
-
-            <button class="suggestion" data-prompt="Помоги написать программный код" type="button">
-              <span>⌘</span>
-              <strong>Написать код</strong>
-              <small>Программирование</small>
-            </button>
-
-            <button class="suggestion" data-prompt="Придумай интересную идею для проекта" type="button">
-              <span>✧</span>
-              <strong>Найти идею</strong>
-              <small>Творчество и проекты</small>
-            </button>
-          </div>
-        </div>
-
-        <div id="messages" class="messages"></div>
-      </section>
-
-      <footer class="composer-area" id="composerArea">
-        <form class="composer" id="chatForm">
-
-          <div id="selectedFiles" class="selected-files" aria-live="polite"></div>
-
-          <textarea
-            id="prompt"
-            rows="1"
-            placeholder="Спросите что-нибудь у Pinsk..."
-            autocomplete="off"
-          ></textarea>
-
-          <div class="composer-tools">
-            <div class="composer-left">
-              <button type="button" class="tool-button" id="attachButton">
-                ＋ <span>Файл</span>
-              </button>
-
-              <button type="button" class="tool-button" id="reasoningButton">
-                ◈ <span>Глубокое мышление</span>
-              </button>
-
-              <input
-                type="file"
-                id="fileInput"
-                hidden
-                multiple
-              >
-            </div>
-
-            <button type="submit" class="send-button" id="sendButton" title="Отправить">↑</button>
-          </div>
-        </form>
-
-        <div class="disclaimer">Pinsk может допускать ошибки. Проверяйте важную информацию.</div>
-      </footer>
-
-    </main>
-  </div>
-
-  <div class="modal-backdrop" id="modalBackdrop">
-    <div class="modal" id="modal">
-      <button class="modal-close" id="modalClose" type="button">×</button>
-      <div id="modalContent"></div>
-    </div>
-  </div>
-
-  <div class="toast" id="toast"></div>
-
-  <script src="/app.js" defer></script>
-</body>
-</html>
+<div class="layout"><aside><div class="logo">Pinsk <span>AI</span></div><nav><button class="active" data-page="home">Главная</button><button data-page="studio">Студия дизайна</button></nav></aside>
+<main>
+<section id="home"><h1>Добро пожаловать в Pinsk AI</h1><p class="muted">Создавай изображения и сайты с помощью искусственного интеллекта.</p><button class="primary" id="openStudio">Открыть студию</button></section>
+<section id="studio" class="hidden"><h1>Студия дизайна</h1><p class="muted">Генерация изображений и создание веб-сайтов.</p>
+<div class="tabs"><button class="tab active" data-mode="site">Создать сайт</button><button class="tab" data-mode="image">Создать изображение</button></div>
+<div id="siteMode" class="grid"><div class="panel"><h3>Описание сайта</h3><label for="sitePrompt">Что нужно создать?</label><textarea id="sitePrompt" placeholder="Опиши сайт, его разделы, цвета и стиль..."></textarea><label for="siteStyle">Стиль</label><select id="siteStyle"><option>Современный минимализм</option><option>Премиальный</option><option>Яркий технологичный</option><option>Корпоративный</option><option>Креативный</option></select><div class="actions"><button class="primary" id="makeSite">Сгенерировать сайт</button><button id="clearSite">Очистить</button></div><div id="siteStatus" class="status"></div></div>
+<div class="panel"><h3>HTML редактор</h3><textarea id="siteCode" class="code" placeholder="HTML-код появится здесь..."></textarea><div class="actions"><button id="refresh">Обновить предпросмотр</button><button id="downloadSite">Скачать HTML</button></div><iframe id="sitePreview" class="preview" title="Предпросмотр сайта" sandbox="allow-scripts"></iframe></div></div>
+<div id="imageMode" class="grid hidden"><div class="panel"><h3>Создать изображение</h3><label for="imagePrompt">Описание</label><textarea id="imagePrompt" placeholder="Опиши желаемое изображение..."></textarea><label for="imageSize">Формат</label><select id="imageSize"><option value="1024x1024">Квадрат</option><option value="1024x1536">Вертикальный</option><option value="1536x1024">Горизонтальный</option></select><button class="primary" id="makeImage">Создать изображение</button><div id="imageStatus" class="status"></div></div><div class="panel"><h3>Результат</h3><img id="imageResult" class="result hidden" alt="Сгенерированное изображение"><a id="imageDownload" class="hidden" download="pinsk-ai-image.png">Скачать изображение</a></div></div>
+</section></main></div><script src="/app.js" defer></script></body></html>
