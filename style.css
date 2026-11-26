@@ -1,3 +1,5 @@
+
+
 :root {
   --bg: #101014;
   --sidebar: #17171d;
@@ -1077,3 +1079,44 @@ button {
     margin: 20px auto;
   }
 }
+
+/* =========================================
+   PINSK AI — DESIGN STUDIO
+   ========================================= */
+.studio-page { max-width: 1500px; }
+.studio-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:24px; }
+.studio-heading h2 { margin:0 0 8px; }
+.studio-heading p, .studio-panel-heading p { color:var(--muted); margin:0; line-height:1.6; }
+.studio-mark { display:grid; place-items:center; width:48px; height:48px; border-radius:15px; color:#fff; font-size:24px; font-weight:800; background:linear-gradient(135deg,#8b78ff,#5a43c8); box-shadow:0 8px 28px #8b78ff35; }
+.studio-mode-tabs { display:flex; flex-wrap:wrap; gap:8px; padding:6px; border:1px solid var(--border); border-radius:14px; background:var(--panel); margin-bottom:18px; }
+.studio-mode-tab { border:0; border-radius:10px; padding:11px 16px; color:var(--muted); background:transparent; }
+.studio-mode-tab.active { color:#fff; background:#393250; box-shadow:inset 0 0 0 1px #65569a; }
+.studio-panel { border:1px solid var(--border); border-radius:17px; padding:22px; background:var(--panel); }
+.studio-panel[hidden], .studio-workspace[hidden], .studio-panel[hidden] * { display:none !important; }
+.studio-panel-heading { margin-bottom:18px; }
+.studio-panel-heading h3 { margin:0 0 7px; font-size:18px; }
+.studio-prompt-form { display:flex; flex-direction:column; gap:10px; }
+.studio-prompt-form label { color:var(--text); font-weight:600; }
+.studio-prompt-form textarea { width:100%; min-height:110px; resize:vertical; padding:13px 14px; border:1px solid var(--border); border-radius:12px; outline:none; color:var(--text); background:#14141b; line-height:1.55; }
+.studio-prompt-form textarea:focus, .studio-code-editor:focus { border-color:var(--accent); box-shadow:0 0 0 3px #8b78ff20; }
+.studio-form-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+.studio-form-footer > span { color:var(--muted); font-size:12px; }
+.studio-status { min-height:22px; margin-top:14px; color:var(--muted); line-height:1.5; }
+.studio-image-result { display:flex; align-items:flex-start; flex-direction:column; gap:12px; margin-top:12px; }
+.studio-image-result img { max-width:100%; max-height:720px; object-fit:contain; border:1px solid var(--border); border-radius:14px; background:#111; }
+.studio-image-download { text-decoration:none; }
+.studio-workspace { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:14px; margin-top:20px; min-height:520px; }
+.studio-editor-column, .studio-preview-column { min-width:0; border:1px solid var(--border); border-radius:13px; overflow:hidden; background:#14141b; }
+.studio-editor-top, .studio-preview-heading { display:flex; justify-content:space-between; align-items:center; gap:10px; min-height:48px; padding:9px 12px; border-bottom:1px solid var(--border); }
+.studio-file-tabs { display:flex; gap:4px; }
+.studio-file-tabs button { border:0; border-radius:7px; padding:7px 10px; color:var(--muted); background:transparent; font-size:12px; }
+.studio-file-tabs button.active { color:#fff; background:#393250; }
+.studio-code-editor { display:block; width:100%; height:390px; padding:14px; resize:vertical; border:0; border-bottom:1px solid var(--border); outline:none; color:#e5e1ff; background:#101016; font:12px/1.6 Consolas,Monaco,monospace; tab-size:2; white-space:pre; overflow:auto; }
+.studio-editor-actions { display:flex; flex-wrap:wrap; gap:8px; padding:11px; }
+.studio-editor-actions button, .studio-download-all button { font-size:12px; }
+.studio-download-all { padding:0 11px 12px; }
+.studio-download-all button { width:100%; }
+.studio-preview-heading span { color:var(--muted); font-size:11px; }
+.studio-preview-column iframe { display:block; width:100%; height:calc(100% - 48px); min-height:470px; border:0; background:#fff; }
+@media (max-width:900px) { .studio-workspace { grid-template-columns:1fr; } .studio-preview-column iframe { height:520px; } }
+@media (max-width:600px) { .studio-panel { padding:14px; } .studio-heading { align-items:flex-start; } .studio-mark { width:40px; height:40px; flex:0 0 40px; } .studio-mode-tabs { flex-direction:column; } .studio-mode-tab { width:100%; text-align:left; } .studio-form-footer { align-items:stretch; flex-direction:column; } .studio-form-footer button { width:100%; } .studio-editor-top { align-items:flex-start; flex-direction:column; } .studio-code-editor { height:300px; } }
