@@ -1,5 +1,9 @@
 
 
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -1509,7 +1513,8 @@ app.get("/api/status", async (req, res) => {
       imageModel: IMAGE_MODEL,
       apiKeyConfigured: keys.some(isKeyActive),
       uploadsEnabled: true,
-      imageGenerationEnabled: true
+      imageGenerationEnabled: true,
+      webSearchEnabled: Boolean(process.env.TAVILY_API_KEY)
     });
   } catch (error) {
     console.error("API status error:", error.message);
@@ -1599,13 +1604,15 @@ app.get("/api/usage", auth, async (req, res) => {
 // ==========================================
 
 app.get("/api/plugins", auth, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
   res.json({
     plugins: [
       {
         id: "web-search",
         name: "Поиск в интернете",
-        description: "Подключение поиска актуальной информации.",
-        status: "not_connected"
+        description: "Поиск актуальной информации в интернете.",
+        status: process.env.TAVILY_API_KEY ? "available" : "not_connected"
       },
       {
         id: "data-analysis",
@@ -1621,6 +1628,182 @@ app.get("/api/plugins", auth, (req, res) => {
       }
     ]
   });
+});
+
+
+// ==========================================
+// INTERNET SEARCH — TAVILY
+// ==========================================
+
+const webSearchRateLimits = new Map();
+const WEB_SEARCH_WINDOW_MS = 60 * 1000;
+const WEB_SEARCH_MAX_REQUESTS = 15;
+
+function checkWebSearchRateLimit(userId) {
+  const now = Date.now();
+  const current = webSearchRateLimits.get(userId);
+
+  if (!current || now - current.startedAt >= WEB_SEARCH_WINDOW_MS) {
+    webSearchRateLimits.set(userId, {
+      startedAt: now,
+      count: 1
+    });
+    return true;
+  }
+
+  if (current.count >= WEB_SEARCH_MAX_REQUESTS) {
+    return false;
+  }
+
+  current.count += 1;
+  return true;
+}
+
+function normalizeSearchResult(item) {
+  if (!item || typeof item !== "object") return null;
+
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(String(item.url || ""));
+  } catch {
+    return null;
+  }
+
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    return null;
+  }
+
+  return {
+    title: String(item.title || parsedUrl.hostname).slice(0, 300),
+    url: parsedUrl.toString(),
+    domain: parsedUrl.hostname.slice(0, 200),
+    snippet: String(item.content || item.snippet || "").slice(0, 1800),
+    publishedDate: item.published_date
+      ? String(item.published_date).slice(0, 100)
+      : null,
+    score: Number.isFinite(Number(item.score))
+      ? Number(item.score)
+      : null
+  };
+}
+
+app.post("/api/search", auth, async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+
+  const apiKey = String(process.env.TAVILY_API_KEY || "").trim();
+
+  if (!apiKey) {
+    return res.status(503).json({
+      error: "Интернет-поиск ещё не настроен. Добавь TAVILY_API_KEY в переменные окружения Render.",
+      code: "SEARCH_NOT_CONFIGURED"
+    });
+  }
+
+  const query = String(req.body.query || "").trim();
+
+  if (!query) {
+    return res.status(400).json({
+      error: "Введи поисковый запрос."
+    });
+  }
+
+  if (query.length > 500) {
+    return res.status(400).json({
+      error: "Поисковый запрос не должен превышать 500 символов."
+    });
+  }
+
+  if (!checkWebSearchRateLimit(req.user.id)) {
+    return res.status(429).json({
+      error: "Слишком много поисковых запросов. Подожди минуту и попробуй снова.",
+      code: "SEARCH_RATE_LIMIT"
+    });
+  }
+
+  try {
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        query,
+        search_depth: "basic",
+        topic: "general",
+        max_results: 8,
+        chunks_per_source: 2,
+        include_answer: true,
+        include_raw_content: false,
+        include_images: false,
+        include_favicon: true,
+        include_usage: true,
+        safe_search: true
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const providerMessage =
+        data?.detail?.error ||
+        data?.detail ||
+        data?.error ||
+        `Tavily HTTP ${response.status}`;
+
+      console.error("Tavily search error:", response.status, providerMessage);
+
+      if (response.status === 401) {
+        return res.status(503).json({
+          error: "Поиск не авторизован. Проверь TAVILY_API_KEY в Render.",
+          code: "SEARCH_AUTH_ERROR"
+        });
+      }
+
+      if ([429, 432, 433, 434].includes(response.status)) {
+        return res.status(503).json({
+          error: "Сервис поиска временно ограничил запросы или закончились доступные кредиты. Проверь лимит Tavily и попробуй позже.",
+          code: "SEARCH_PROVIDER_LIMIT"
+        });
+      }
+
+      return res.status(502).json({
+        error: "Провайдер интернет-поиска временно не отвечает. Попробуй позже.",
+        code: "SEARCH_PROVIDER_ERROR"
+      });
+    }
+
+    const results = (Array.isArray(data.results) ? data.results : [])
+      .map(normalizeSearchResult)
+      .filter(Boolean)
+      .slice(0, 8);
+
+    return res.json({
+      success: true,
+      query,
+      answer: String(data.answer || "").slice(0, 6000),
+      results,
+      responseTime: data.response_time || null,
+      usage: data.usage && Number.isFinite(Number(data.usage.credits))
+        ? { credits: Number(data.usage.credits) }
+        : null
+    });
+
+  } catch (error) {
+    console.error("Internet search error:", error.message);
+
+    const timedOut = error.name === "TimeoutError" ||
+      error.name === "AbortError";
+
+    return res.status(503).json({
+      error: timedOut
+        ? "Поиск занял слишком много времени. Попробуй ещё раз."
+        : "Не удалось выполнить интернет-поиск. Попробуй позже.",
+      code: timedOut ? "SEARCH_TIMEOUT" : "SEARCH_UNAVAILABLE"
+    });
+  }
 });
 
 
@@ -2706,7 +2889,6 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
-
+Закрыть средство просмотра
 
 
