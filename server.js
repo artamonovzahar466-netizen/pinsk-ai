@@ -1,5 +1,10 @@
 
 
+
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -2702,6 +2707,97 @@ app.post(
 
 
 // ==========================================
+// DESIGN STUDIO — WEBSITE GENERATION
+// ==========================================
+
+app.post("/api/design/generate", auth, async (req, res) => {
+  let messageReserved = false;
+
+  try {
+    const prompt = String(req.body.prompt || "").trim();
+
+    if (!prompt) {
+      return res.status(400).json({ error: "Опиши сайт, который нужно создать." });
+    }
+
+    if (prompt.length > 5000) {
+      return res.status(400).json({ error: "Описание сайта не должно превышать 5000 символов." });
+    }
+
+    const limits = limitsFor(req.user);
+    if (limits.messages !== Infinity) {
+      messageReserved = await reserveMessage(req.user.id);
+      if (!messageReserved) {
+        const usage = await getUsage(req.user.id);
+        return res.status(429).json({
+          error: "Дневной лимит сообщений исчерпан.",
+          code: "DAILY_LIMIT_REACHED",
+          used: usage.messages,
+          limit: limits.messages
+        });
+      }
+    }
+
+    const answer = await askAI([
+      {
+        role: "system",
+        content:
+          "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
+          "Создавай законченные, адаптивные, визуально качественные сайты. " +
+          "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
+          "html — только содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
+          "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
+          "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
+          "Код должен работать автономно в sandbox iframe. Добавляй доступность, адаптивность и интерактивность. " +
+          "Все текстовые значения JSON должны быть корректно экранированы."
+      },
+      {
+        role: "user",
+        content: "Создай сайт по этому заданию.\n\n" + prompt
+      }
+    ]);
+
+    let generated;
+    try {
+      const cleaned = String(answer)
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      const start = cleaned.indexOf("{");
+      const end = cleaned.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("JSON not found");
+      generated = JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
+    }
+
+    const html = String(generated.html || "").slice(0, 120000);
+    const css = String(generated.css || "").slice(0, 120000);
+    const js = String(generated.js || "").slice(0, 120000);
+
+    if (!html.trim()) {
+      throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
+    }
+
+    return res.json({ success: true, html, css, js });
+
+  } catch (error) {
+    console.error("Design Studio generation error:", error.message);
+    if (messageReserved) {
+      await releaseMessage(req.user.id).catch(() => {});
+    }
+
+    const status = [429, 529].includes(error.status) ? 503 : 500;
+    return res.status(status).json({
+      error: status === 503
+        ? "ИИ временно перегружен. Попробуй создать сайт позже."
+        : error.message || "Не удалось создать сайт. Попробуй изменить описание."
+    });
+  }
+});
+
+
+// ==========================================
 // DATA ANALYSIS
 // ==========================================
 
@@ -2885,5 +2981,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
 
