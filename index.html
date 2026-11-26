@@ -1,94 +1,504 @@
-
-
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#10131d">
-  <title>Pinsk AI</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101114">
+  <title>Pinsk AI — Студия дизайна</title>
   <style>
-    :root{color-scheme:dark;--bg:#10131d;--panel:#191e2b;--panel2:#202738;--line:#30394d;--text:#f4f6fb;--muted:#9ba7bb;--accent:#8b7cff;--accent2:#6d5dfc}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,Arial,sans-serif;min-height:100vh}
-    button,input,textarea{font:inherit}button{cursor:pointer;border:0;color:white;background:var(--accent2);border-radius:10px;padding:11px 15px;font-weight:600}
-    button.secondary{background:var(--panel2);border:1px solid var(--line)}button:disabled{opacity:.5;cursor:not-allowed}
-    .app{display:grid;grid-template-columns:245px 1fr;min-height:100vh}.sidebar{background:#141925;border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:20px}
-    .brand{font-size:22px;font-weight:800;letter-spacing:-.8px;padding:4px 10px}.brand span{color:#a99eff}
-    .nav{display:grid;gap:7px}.nav button{background:transparent;text-align:left;color:var(--muted);font-weight:500}.nav button.active,.nav button:hover{background:var(--panel2);color:white}
-    .profile{margin-top:auto;border-top:1px solid var(--line);padding:16px 10px;color:var(--muted)}
-    main{min-width:0;padding:28px clamp(16px,4vw,52px);max-width:1500px;width:100%;margin:auto}
-    .top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:28px}.top h1{font-size:26px;margin:0}
-    .page{display:none}.page.active{display:block}.muted{color:var(--muted)}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}
-    textarea,input{width:100%;background:#111723;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:13px;outline:none}
-    textarea:focus,input:focus{border-color:var(--accent)}textarea{resize:vertical;min-height:130px}
-    .stack{display:grid;gap:13px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>*{flex:0 0 auto}.row .grow{flex:1 1 220px}
-    .studio-tabs{display:flex;gap:8px;margin-bottom:16px}.studio-tabs button.active{background:var(--accent2)}
-    .studio-grid{display:grid;grid-template-columns:minmax(280px,.8fr) minmax(0,1.2fr);gap:16px}
-    .preview{background:#fff;color:#111;border-radius:12px;overflow:hidden;min-height:480px}.preview iframe{width:100%;height:600px;border:0;background:#fff}
-    .editor{min-height:300px;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre}
-    .result-image{width:100%;max-height:600px;object-fit:contain;background:#0d111a;border-radius:12px}
-    .chat-log{height:55vh;overflow:auto;display:flex;flex-direction:column;gap:12px;margin-bottom:16px}.bubble{padding:13px 15px;border-radius:14px;max-width:85%;white-space:pre-wrap;line-height:1.55}.user{background:#373064;align-self:flex-end}.assistant{background:var(--panel2);align-self:flex-start}
-    .notice{color:var(--muted);font-size:12px}.hidden{display:none!important}
-    @media(max-width:850px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;z-index:5;padding:10px;gap:8px}.brand{padding:4px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap;padding:9px}.profile{display:none}main{padding:18px}.studio-grid{grid-template-columns:1fr}}
+    :root {
+      color-scheme: dark;
+      --bg: #101114;
+      --panel: #181a20;
+      --panel2: #20232b;
+      --border: #30333d;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #8b5cf6;
+      --accent2: #6d45d9;
+      --green: #22c55e;
+      --red: #ef4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, Arial, sans-serif;
+      min-height: 100vh;
+    }
+
+    button, input, textarea, select { font: inherit; }
+
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: var(--panel2);
+      border-radius: 9px;
+      padding: 10px 14px;
+      transition: .2s;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    .primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    .primary:hover { background: var(--accent2); }
+
+    header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--border);
+      background: #15161b;
+    }
+
+    .brand {
+      font-size: 19px;
+      font-weight: 800;
+      letter-spacing: -.5px;
+    }
+
+    .brand span { color: #a78bfa; }
+
+    .header-actions {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      min-height: calc(100vh - 64px);
+    }
+
+    aside {
+      background: #15161b;
+      border-right: 1px solid var(--border);
+      padding: 18px 12px;
+    }
+
+    .side-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      padding: 10px;
+      text-transform: uppercase;
+    }
+
+    .nav-button {
+      width: 100%;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      text-align: left;
+      margin-bottom: 5px;
+      background: transparent;
+      border-color: transparent;
+    }
+
+    .nav-button.active {
+      background: #292238;
+      border-color: #514078;
+      color: #c4b5fd;
+    }
+
+    main { min-width: 0; padding: 22px; }
+
+    .page-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    h1 { font-size: 24px; margin: 0 0 6px; }
+    .subtitle { color: var(--muted); font-size: 13px; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-body { padding: 16px; }
+
+    label {
+      display: block;
+      color: #d1d5db;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      color: var(--text);
+      background: #101116;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 12px;
+      outline: none;
+      margin-bottom: 14px;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 125px;
+      line-height: 1.5;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .full { width: 100%; }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      padding: 8px 12px;
+      font-size: 12px;
+      background: transparent;
+    }
+
+    .tab.active {
+      background: #34284d;
+      border-color: #7055a8;
+      color: #ddd6fe;
+    }
+
+    .editor-area { padding: 12px; }
+
+    .editor-area textarea {
+      min-height: 420px;
+      margin: 0;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+      tab-size: 2;
+      white-space: pre;
+    }
+
+    .preview-frame {
+      display: block;
+      width: 100%;
+      height: 520px;
+      background: white;
+      border: 0;
+    }
+
+    .preview-toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .preview-toolbar span {
+      color: var(--muted);
+      font-size: 12px;
+      margin-right: auto;
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 20px;
+      margin-top: 10px;
+      white-space: pre-wrap;
+    }
+
+    .status.error { color: #fca5a5; }
+    .status.success { color: #86efac; }
+
+    .image-result {
+      width: 100%;
+      border-radius: 10px;
+      display: none;
+      margin-top: 14px;
+      background: #0c0d10;
+    }
+
+    .projects-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .project-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      background: var(--panel2);
+      padding: 11px;
+      border-radius: 9px;
+    }
+
+    .project-item strong {
+      overflow-wrap: anywhere;
+      font-size: 13px;
+    }
+
+    .project-actions { display: flex; gap: 5px; }
+    .project-actions button { padding: 7px 9px; font-size: 12px; }
+
+    .hidden { display: none !important; }
+
+    .notice {
+      padding: 11px;
+      background: #211d30;
+      border: 1px solid #453766;
+      color: #c4b5fd;
+      border-radius: 9px;
+      font-size: 12px;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+
+    @media (max-width: 950px) {
+      .workspace { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: 65px minmax(0, 1fr); }
+      aside { padding: 12px 5px; }
+      .side-title, .nav-label { display: none; }
+      .nav-button { justify-content: center; padding: 12px 5px; }
+    }
+
+    @media (max-width: 600px) {
+      header { padding: 0 12px; }
+      main { padding: 13px; }
+      .header-actions button { padding: 8px; font-size: 12px; }
+      .page-heading { align-items: flex-start; }
+      .field-row { grid-template-columns: 1fr; gap: 0; }
+      .preview-frame { height: 420px; }
+    }
   </style>
 </head>
+
 <body>
-<div class="app">
-  <aside class="sidebar">
-    <div class="brand">Pinsk <span>AI</span></div>
-    <nav class="nav">
-      <button class="active" data-page="chat">✦ Чат</button>
-      <button data-page="studio">◈ Студия дизайна</button>
-    </nav>
-    <div class="profile">Pinsk AI<br><span class="notice">Персональный ИИ-помощник</span></div>
-  </aside>
-  <main>
-    <div class="top"><h1 id="pageTitle">Чат</h1><span class="muted" id="status">Готов к работе</span></div>
-    <section class="page active" id="page-chat">
-      <div class="panel">
-        <div class="chat-log" id="chatLog"><div class="bubble assistant">Привет! Я Pinsk AI. Чем могу помочь?</div></div>
-        <form class="row" id="chatForm">
-          <input class="grow" id="chatInput" placeholder="Напишите сообщение..." autocomplete="off">
-          <button id="sendChat">Отправить</button>
-        </form>
-      </div>
-    </section>
-    <section class="page" id="page-studio">
-      <div class="studio-tabs">
-        <button class="active" data-mode="website">Создать сайт</button>
-        <button class="secondary" data-mode="image">Создать изображение</button>
-      </div>
-      <div id="websiteMode" class="studio-grid">
-        <div class="panel stack">
-          <h2 style="margin:0">Генератор сайтов</h2>
-          <p class="muted">Опишите сайт, который хотите получить. ИИ создаст HTML, CSS и JavaScript в одном файле.</p>
-          <textarea id="sitePrompt" placeholder="Например: современный сайт кофейни с меню, галереей и формой обратной связи..."></textarea>
-          <button id="generateSite">Создать сайт</button>
-          <label>HTML-код — его можно редактировать</label>
-          <textarea id="siteCode" class="editor" spellcheck="false" placeholder="Здесь появится HTML-код..."></textarea>
-          <div class="row">
-            <button id="refreshPreview" class="secondary">Обновить предпросмотр</button>
-            <button id="downloadSite">Скачать HTML</button>
+  <header>
+    <div class="brand">Pinsk <span>AI</span> / Studio</div>
+    <div class="header-actions">
+      <button id="newProjectBtn">＋ Новый проект</button>
+      <button class="primary" id="saveProjectBtn">Сохранить</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <div class="side-title">Рабочая область</div>
+
+      <button class="nav-button active" data-page="website">
+        <span>⌘</span><span class="nav-label">Создание сайтов</span>
+      </button>
+
+      <button class="nav-button" data-page="image">
+        <span>▧</span><span class="nav-label">Генерация изображений</span>
+      </button>
+
+      <button class="nav-button" data-page="projects">
+        <span>▤</span><span class="nav-label">Мои проекты</span>
+      </button>
+    </aside>
+
+    <main>
+      <section id="websitePage">
+        <div class="page-heading">
+          <div>
+            <h1>Создание сайтов</h1>
+            <div class="subtitle">Создавай сайты с помощью Gemini и редактируй их вручную</div>
           </div>
-          <div class="notice">Предпросмотр запускается в изолированном iframe. Не вставляйте в него неизвестный код.</div>
         </div>
-        <div class="panel">
-          <h2 style="margin-top:0">Предпросмотр</h2>
-          <div class="preview"><iframe id="sitePreview" title="Предпросмотр сайта" sandbox="allow-scripts"></iframe></div>
+
+        <div class="workspace">
+          <section class="panel">
+            <div class="panel-header">Генератор сайта</div>
+            <div class="panel-body">
+              <div class="notice">
+                Опиши сайт обычным языком. Gemini создаст HTML, CSS и JavaScript.
+                После генерации ты сможешь изменить код и посмотреть результат.
+              </div>
+
+              <label for="siteName">Название проекта</label>
+              <input id="siteName" placeholder="Например: Интернет-магазин">
+
+              <label for="sitePrompt">Что нужно создать?</label>
+              <textarea id="sitePrompt" placeholder="Создай современный сайт для кофейни. Нужны главная страница, меню, информация о заведении и контакты..."></textarea>
+
+              <div class="field-row">
+                <div>
+                  <label for="siteStyle">Стиль</label>
+                  <select id="siteStyle">
+                    <option value="Современный минимализм">Минимализм</option>
+                    <option value="Премиальный тёмный дизайн">Премиальный</option>
+                    <option value="Яркий современный дизайн">Яркий</option>
+                    <option value="Корпоративный стиль">Корпоративный</option>
+                    <option value="Креативный дизайн">Креативный</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="siteDevice">Адаптация</label>
+                  <select id="siteDevice">
+                    <option value="Адаптивный дизайн для ПК, планшетов и телефонов">Все устройства</option>
+                    <option value="Приоритет мобильной версии">Мобильная версия</option>
+                    <option value="Приоритет десктопной версии">Компьютер</option>
+                  </select>
+                </div>
+              </div>
+
+              <button class="primary full" id="generateSiteBtn">✦ Создать сайт через Gemini</button>
+              <div class="status" id="siteStatus"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <span>Редактор кода</span>
+              <button id="downloadBtn">↓ Скачать HTML</button>
+            </div>
+
+            <div class="tabs">
+              <button class="tab active" data-editor="html">HTML</button>
+              <button class="tab" data-editor="css">CSS</button>
+              <button class="tab" data-editor="js">JavaScript</button>
+              <button class="tab" data-editor="preview">Предпросмотр</button>
+            </div>
+
+            <div class="editor-area" id="codeEditor">
+              <textarea id="codeInput" spellcheck="false" placeholder="Здесь появится код сайта..."></textarea>
+            </div>
+
+            <div id="previewArea" class="hidden">
+              <div class="preview-toolbar">
+                <span>Изолированный предпросмотр</span>
+                <button id="refreshPreviewBtn">↻ Обновить</button>
+                <button id="openPreviewBtn">↗ Открыть</button>
+              </div>
+              <iframe
+                id="previewFrame"
+                class="preview-frame"
+                title="Предпросмотр сайта"
+                sandbox="allow-scripts allow-forms allow-modals"
+                referrerpolicy="no-referrer"
+              ></iframe>
+            </div>
+          </section>
         </div>
-      </div>
-      <div id="imageMode" class="panel stack hidden">
-        <h2 style="margin:0">Генерация изображений</h2>
-        <p class="muted">Опишите изображение максимально подробно.</p>
-        <textarea id="imagePrompt" placeholder="Например: яркая 3D-иллюстрация спелого лимона на синем фоне..."></textarea>
-        <div class="row"><button id="generateImage">Сгенерировать изображение</button><span class="notice" id="imageStatus"></span></div>
-        <img id="imageResult" class="result-image hidden" alt="Сгенерированное изображение">
-      </div>
-    </section>
-  </main>
-</div>
-<script src="app.js"></script>
+      </section>
+
+      <section id="imagePage" class="hidden">
+        <div class="page-heading">
+          <div>
+            <h1>Генерация изображений</h1>
+            <div class="subtitle">Создавай изображения с помощью AI Horde</div>
+          </div>
+        </div>
+
+        <div class="workspace">
+          <section class="panel">
+            <div class="panel-header">Параметры изображения</div>
+            <div class="panel-body">
+              <label for="imagePrompt">Описание изображения</label>
+              <textarea id="imagePrompt" placeholder="Подробно опиши изображение, которое нужно создать..."></textarea>
+
+              <div class="field-row">
+                <div>
+                  <label for="imageWidth">Ширина</label>
+                  <select id="imageWidth">
+                    <option value="512">512</option>
+                    <option value="768" selected>768</option>
+                    <option value="1024">1024</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="imageHeight">Высота</label>
+                  <select id="imageHeight">
+                    <option value="512">512</option>
+                    <option value="768" selected>768</option>
+                    <option value="1024">1024</option>
+                  </select>
+                </div>
+              </div>
+
+              <button class="primary full" id="generateImageBtn">✦ Создать изображение</button>
+              <div class="status" id="imageStatus"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">Результат</div>
+            <div class="panel-body">
+              <img id="imageResult" class="image-result" alt="Созданное изображение">
+              <button id="downloadImageBtn" class="full hidden">↓ Скачать изображение</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="projectsPage" class="hidden">
+        <div class="page-heading">
+          <div>
+            <h1>Мои проекты</h1>
+            <div class="subtitle">Сохранённые проекты этой студии</div>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">Сохранённые проекты</div>
+          <div class="panel-body">
+            <div id="projectsList" class="projects-list"></div>
+            <div class="status" id="projectsStatus"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js" defer></script>
 </body>
 </html>
