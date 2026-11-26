@@ -873,9 +873,13 @@ function isImageFile(file) {
   return /^image\/(png|jpeg|jpg|webp|gif)$/i.test(file.type);
 }
 
-function clearSelectedFiles() {
+function revokeTemporaryUrls() {
   temporaryUrls.forEach(url => URL.revokeObjectURL(url));
   temporaryUrls = [];
+}
+
+function clearSelectedFiles() {
+  revokeTemporaryUrls();
 
   selectedFiles = [];
 
@@ -895,6 +899,8 @@ function installDragAndDrop() {
 
   const overlay = document.createElement("div");
   overlay.id = "pinskDropOverlay";
+  overlay.setAttribute("aria-hidden", "true");
+
   overlay.innerHTML = `
     <div class="pinsk-drop-content">
       <div class="pinsk-drop-icon">📂</div>
@@ -906,31 +912,28 @@ function installDragAndDrop() {
   document.body.appendChild(overlay);
 
   function hasFiles(event) {
-    return Array.from(event.dataTransfer?.types || [])
-      .includes("Files");
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
   }
 
   function showOverlay() {
-    if (currentPage !== "chat") return;
-    if (imageMode) return;
+    if (currentPage !== "chat" || imageMode) return;
 
     overlay.classList.add("active");
+    overlay.setAttribute("aria-hidden", "false");
   }
 
   function hideOverlay() {
     overlay.classList.remove("active");
+    overlay.setAttribute("aria-hidden", "true");
   }
 
   document.addEventListener("dragenter", event => {
     if (!hasFiles(event)) return;
 
     event.preventDefault();
-
     dragCounter++;
 
-    if (currentPage === "chat" && !imageMode) {
-      showOverlay();
-    }
+    showOverlay();
   });
 
   document.addEventListener("dragover", event => {
@@ -939,12 +942,11 @@ function installDragAndDrop() {
     event.preventDefault();
 
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "copy";
+      event.dataTransfer.dropEffect =
+        currentPage === "chat" && !imageMode ? "copy" : "none";
     }
 
-    if (currentPage === "chat" && !imageMode) {
-      showOverlay();
-    }
+    showOverlay();
   });
 
   document.addEventListener("dragleave", event => {
@@ -952,10 +954,9 @@ function installDragAndDrop() {
 
     event.preventDefault();
 
-    dragCounter--;
+    dragCounter = Math.max(0, dragCounter - 1);
 
-    if (dragCounter <= 0) {
-      dragCounter = 0;
+    if (dragCounter === 0) {
       hideOverlay();
     }
   });
@@ -979,17 +980,21 @@ function installDragAndDrop() {
       return;
     }
 
-    const files = event.dataTransfer.files;
+    const files = event.dataTransfer?.files;
 
     if (!files || !files.length) return;
 
+    const previousCount = selectedFiles.length;
+
     addSelectedFiles(files);
 
-    if (files.length) {
+    const addedCount = selectedFiles.length - previousCount;
+
+    if (addedCount > 0) {
       toast(
-        files.length === 1
+        addedCount === 1
           ? "Файл добавлен."
-          : `Добавлено файлов: ${files.length}`
+          : `Добавлено файлов: ${addedCount}`
       );
     }
   });
@@ -998,9 +1003,16 @@ function installDragAndDrop() {
     dragCounter = 0;
     hideOverlay();
   });
+
+  window.addEventListener("blur", () => {
+    dragCounter = 0;
+    hideOverlay();
+  });
 }
 
 function removeSelectedFile(index) {
+  if (index < 0 || index >= selectedFiles.length) return;
+
   selectedFiles.splice(index, 1);
   renderAttachmentPreview();
 }
@@ -1041,17 +1053,13 @@ function addSelectedFiles(files) {
 }
 
 function renderAttachmentPreview() {
-  const form = $("chatForm");
-  if (!form) return;
+  // Используем контейнер, который уже находится в HTML внутри формы.
+  const container = $("selectedFiles");
 
-  let container = $("attachmentPreview");
+  if (!container) return;
 
-  if (!container) {
-    container = document.createElement("div");
-    container.id = "attachmentPreview";
-    container.className = "pinsk-attachment-preview";
-    form.parentElement?.insertBefore(container, form);
-  }
+  // Освобождаем старые URL изображений перед повторной отрисовкой.
+  revokeTemporaryUrls();
 
   container.innerHTML = "";
 
@@ -1081,6 +1089,7 @@ function renderAttachmentPreview() {
       const icon = document.createElement("div");
       icon.className = "pinsk-attachment-icon";
       icon.textContent = file.name.split(".").pop()?.toUpperCase() || "FILE";
+
       item.appendChild(icon);
     }
 
@@ -1102,6 +1111,7 @@ function renderAttachmentPreview() {
     remove.className = "pinsk-attachment-remove";
     remove.textContent = "×";
     remove.title = "Удалить файл";
+    remove.setAttribute("aria-label", `Удалить файл ${file.name}`);
 
     remove.addEventListener("click", () => removeSelectedFile(index));
 
@@ -1438,6 +1448,7 @@ function installImageModeButton() {
       if (selectedFiles.length) clearSelectedFiles();
 
       toast("Режим генерации включён. Опиши изображение.");
+
       if ($("prompt")) {
         $("prompt").placeholder = "Опиши изображение, которое нужно создать...";
         $("prompt").focus();
@@ -2247,48 +2258,49 @@ function installPinskUiFixes() {
   style.id = "pinskUiFixes";
 
   style.textContent = `
-  #pinskDropOverlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 99999;
-    align-items: center;
-    justify-content: center;
-    background: rgba(12, 10, 22, .82);
-    backdrop-filter: blur(7px);
-    pointer-events: none;
-  }
+    /* Экран Drag & Drop — скрыт до перетаскивания */
+    #pinskDropOverlay {
+      display: none !important;
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      align-items: center;
+      justify-content: center;
+      background: rgba(12, 10, 22, .82);
+      backdrop-filter: blur(7px);
+      pointer-events: none;
+    }
 
-  #pinskDropOverlay.active {
-    display: flex;
-  }
+    #pinskDropOverlay.active {
+      display: flex !important;
+    }
 
-  .pinsk-drop-content {
-    width: min(500px, calc(100% - 40px));
-    padding: 45px 25px;
-    text-align: center;
-    border: 2px dashed #9b88ff;
-    border-radius: 22px;
-    background: #211d32;
-    box-shadow: 0 0 50px #8b78ff35;
-  }
+    .pinsk-drop-content {
+      width: min(500px, calc(100% - 40px));
+      padding: 45px 25px;
+      text-align: center;
+      border: 2px dashed #9b88ff;
+      border-radius: 22px;
+      background: #211d32;
+      box-shadow: 0 0 50px #8b78ff35;
+    }
 
-  .pinsk-drop-icon {
-    font-size: 58px;
-    margin-bottom: 15px;
-  }
+    .pinsk-drop-icon {
+      font-size: 58px;
+      margin-bottom: 15px;
+    }
 
-  .pinsk-drop-content h2 {
-    margin: 0 0 12px;
-    color: #fff;
-    font-size: 23px;
-  }
+    .pinsk-drop-content h2 {
+      margin: 0 0 12px;
+      color: #fff;
+      font-size: 23px;
+    }
 
-  .pinsk-drop-content p {
-    margin: 0;
-    color: #c2badb;
-    font-size: 14px;
-  }
+    .pinsk-drop-content p {
+      margin: 0;
+      color: #c2badb;
+      font-size: 14px;
+    }
 
     .auth-box label,
     .profile-modal label {
@@ -2518,7 +2530,7 @@ function installPinskUiFixes() {
     }
 
     /* Предпросмотр вложений */
-    .pinsk-attachment-preview {
+    #selectedFiles {
       display: none;
       flex-wrap: wrap;
       gap: 9px;
@@ -2660,7 +2672,7 @@ function installPinskUiFixes() {
 
     /* Мобильная версия */
     @media (max-width: 760px) {
-      .pinsk-attachment-preview {
+      #selectedFiles {
         gap: 6px;
         padding: 8px 0;
       }
@@ -2723,7 +2735,7 @@ async function init() {
 
   installPinskUiFixes();
 
-  // Устанавливаем обработчики перетаскивания файлов.
+  // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
 
   initEvents();
