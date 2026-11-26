@@ -7,7 +7,6 @@ const dotenv = require("dotenv");
 const { Pool } = require("pg");
 const crypto = require("crypto");
 const path = require("path");
-const fs = require("fs");
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
@@ -1496,7 +1495,6 @@ function serializableLimits(limits) {
 // STATUS
 // ==========================================
 
-
 app.get("/api/status", async (req, res) => {
   try {
     const keys = await getGeminiKeys();
@@ -1520,7 +1518,6 @@ app.get("/api/status", async (req, res) => {
     });
   }
 });
-
 
 
 // ==========================================
@@ -1756,7 +1753,6 @@ app.delete("/api/memory/:id", auth, async (req, res) => {
 });
 
 
-
 // ==========================================
 // GEMINI API
 // ==========================================
@@ -1769,39 +1765,52 @@ function convertToGeminiContents(messages) {
         ? "model"
         : "user";
 
-      let parts;
+      const rawContent = message.content;
 
-      if (typeof message.content === "string") {
-        parts = [{ text: message.content }];
-      } else if (Array.isArray(message.content)) {
-        parts = message.content.map(item => {
-          if (item.type === "text") {
-            return { text: String(item.text || "") };
+      const items = Array.isArray(rawContent)
+        ? rawContent
+        : [{
+            type: "text",
+            text: String(rawContent ?? "")
+          }];
+
+      const parts = items.map(item => {
+        if (!item) return null;
+
+        if (item.type === "text") {
+          return {
+            text: String(item.text || "")
+          };
+        }
+
+        if (item.type === "image_url") {
+          const url = item.image_url?.url || "";
+
+          const match = url.match(
+            /^data:(image\/(?:png|jpeg|gif|webp));base64,([\s\S]+)$/
+          );
+
+          if (match) {
+            return {
+              inlineData: {
+                mimeType: match[1],
+                data: match[2]
+              }
+            };
           }
 
-          if (item.type === "image_url") {
-            const url = item.image_url?.url || "";
-            const match = url.match(
-              /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/
-            );
+          return {
+            text: "[Изображение не удалось обработать]"
+          };
+        }
 
-            if (match) {
-              return {
-                inlineData: {
-                  mimeType: match[1],
-                  data: match[2]
-                }
-              };
-            }
-          }
+        return null;
+      }).filter(Boolean);
 
-          return null;
-        }).filter(Boolean);
-      } else {
-        parts = [{ text: String(message.content ?? "") }];
-      }
-
-      return { role, parts };
+      return {
+        role,
+        parts
+      };
     })
     .filter(message => message.parts.length > 0);
 }
@@ -1813,9 +1822,14 @@ async function askAI(messages) {
       ? message.content
       : String(message.content || "")
     )
+    .filter(Boolean)
     .join("\n\n");
 
   const contents = convertToGeminiContents(messages);
+
+  if (!contents.length) {
+    throw new Error("Нет сообщений для отправки в Gemini.");
+  }
 
   return executeWithKeyRotation(
     pool,
@@ -1828,9 +1842,13 @@ async function askAI(messages) {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            systemInstruction: {
-              parts: [{ text: systemText }]
-            },
+            ...(systemText
+              ? {
+                  systemInstruction: {
+                    parts: [{ text: systemText }]
+                  }
+                }
+              : {}),
             contents,
             generationConfig: {
               maxOutputTokens: 4096
@@ -1853,13 +1871,22 @@ async function askAI(messages) {
         throw error;
       }
 
-      const answer = (data.candidates?.[0]?.content?.parts || [])
+      const candidate = data.candidates?.[0];
+
+      const answer = (candidate?.content?.parts || [])
         .filter(part => typeof part.text === "string")
         .map(part => part.text)
-        .join("\n");
+        .join("\n")
+        .trim();
 
       if (!answer) {
-        throw new Error("Gemini не вернул текстовый ответ.");
+        const reason = candidate?.finishReason;
+
+        throw new Error(
+          reason
+            ? `Gemini не вернул текстовый ответ. Причина: ${reason}`
+            : "Gemini не вернул текстовый ответ."
+        );
       }
 
       return answer;
@@ -1886,7 +1913,6 @@ app.post(
     const files = req.files || [];
 
     try {
-
       const message = String(req.body.message || "").trim();
 
       const conversationId = String(
@@ -1974,6 +2000,7 @@ app.post(
 
           if (claimed.rowCount !== 1) {
             if (messageReserved) await releaseMessage(userId);
+
             if (filesReserved) {
               await releaseCounter(userId, "files", files.length);
             }
@@ -1984,6 +2011,7 @@ app.post(
           }
         } else {
           if (messageReserved) await releaseMessage(userId);
+
           if (filesReserved) {
             await releaseCounter(userId, "files", files.length);
           }
@@ -2142,9 +2170,9 @@ app.post(
           .catch(() => {});
       }
 
-     const status = error instanceof multer.MulterError
-  ? 400
-  : ([429, 529].includes(error.status) ? 503 : 500);
+      const status = error instanceof multer.MulterError
+        ? 400
+        : ([429, 529].includes(error.status) ? 503 : 500);
 
       res.status(status).json({
         error: error instanceof multer.MulterError
@@ -2371,7 +2399,7 @@ async function imageGenerationHandler(req, res) {
         limits.images
       );
 
-            if (!reserved) {
+      if (!reserved) {
         const usage = await getUsage(req.user.id);
 
         return res.status(429).json({
@@ -2435,8 +2463,6 @@ app.post(
 
 app.post("/api/analysis", auth, async (req, res) => {
   try {
-
-
     const content = String(req.body.content || "").trim();
 
     const question = String(
@@ -2476,18 +2502,19 @@ app.post("/api/analysis", auth, async (req, res) => {
       answer
     });
 
- } catch (error) {
-  console.error("Data analysis error:", error.message);
+  } catch (error) {
+    console.error("Data analysis error:", error.message);
 
-  const status = [429, 529].includes(error.status) ? 503 : 500;
+    const status = [429, 529].includes(error.status) ? 503 : 500;
 
-  res.status(status).json({
-    error: status === 503
-      ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
-      : "Не удалось выполнить анализ данных."
-  });
-}
+    res.status(status).json({
+      error: status === 503
+        ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
+        : "Не удалось выполнить анализ данных."
+    });
+  }
 });
+
 
 // ==========================================
 // STATIC WEBSITE AND SECURITY
