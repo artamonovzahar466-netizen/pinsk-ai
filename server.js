@@ -1,9 +1,5 @@
 
 
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -2590,9 +2586,11 @@ async function generateHordeImage(prompt) {
       body: JSON.stringify({
         prompt: String(prompt).slice(0, 2048),
         params: {
-          width: 512,
-          height: 512,
-          steps: 18,
+          // 448x448 stays below AI Horde's 511x511 kudos threshold.
+          // Fewer steps also reduce sampler work during high demand.
+          width: 448,
+          height: 448,
+          steps: 12,
           n: 1,
           cfg_scale: 7,
           sampler_name: "k_euler",
@@ -3079,5 +3077,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
 
