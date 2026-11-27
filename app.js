@@ -1,5 +1,12 @@
 
 
+
+
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -41,8 +48,9 @@ let voiceActive = false;
 let voiceChatId = null;
 let voiceBusy = false;
 let voiceRecognitionStarting = false;
-let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "ara";
-if (!["ara", "rex", "eve", "sal", "leo"].includes(selectedVoicePreset)) selectedVoicePreset = "ara";
+let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "JBFqnCBsd6RMkjVDRZzb";
+const PINSK_VOICE_IDS = ["JBFqnCBsd6RMkjVDRZzb", "onwK4e9ZLuTAKqWW03F9", "EXAVITQu4vr4xnSDxMaL"];
+if (!PINSK_VOICE_IDS.includes(selectedVoicePreset)) selectedVoicePreset = PINSK_VOICE_IDS[0];
 let voiceAudio = null;
 let voiceAudioUrl = null;
 let voicePlaybackResolve = null;
@@ -1698,11 +1706,9 @@ function renderPageContent(page) {
           <div class="voice-status" id="voiceStatus">Нажми «Начать разговор» и разреши доступ к микрофону.</div>
           <label class="voice-select-label" for="voicePreset">Голос Pinsk</label>
           <select id="voicePreset" class="voice-select">
-            <option value="ara">Молодой и дружелюбный</option>
-            <option value="rex">Уверенный мужской</option>
-            <option value="eve">Энергичный</option>
-            <option value="sal">Спокойный и естественный</option>
-            <option value="leo">Низкий, уверенный</option>
+            <option value="JBFqnCBsd6RMkjVDRZzb">George — мужской, мягкий и дружелюбный</option>
+            <option value="onwK4e9ZLuTAKqWW03F9">Daniel — мужской, уверенный</option>
+            <option value="EXAVITQu4vr4xnSDxMaL">Sarah — женский, спокойный</option>
           </select>
           <div class="voice-controls">
             <button class="primary-button voice-start-button" id="voiceStart">🎙 Начать разговор</button>
