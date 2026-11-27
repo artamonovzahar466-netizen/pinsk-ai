@@ -2518,6 +2518,51 @@ async function generateCloudflareImage(prompt) {
 }
 
 
+// ==========================================
+// MULTILINGUAL IMAGE PROMPT UNDERSTANDING
+// ==========================================
+
+async function prepareImagePrompt(prompt) {
+  const source = String(prompt || "").trim();
+
+  // English prompts already work well with FLUX: do not add an extra API call.
+  // For Russian and other Cyrillic prompts, convert the meaning into a precise
+  // visual prompt before sending it to the image model.
+  if (!/[\u0400-\u04FF]/u.test(source)) {
+    return source;
+  }
+
+  const translated = await askAI([
+    {
+      role: "system",
+      content:
+        "You are a professional image-prompt translator for the FLUX image model. " +
+        "Translate the user's image request into clear, natural English. " +
+        "Preserve the exact meaning and every named object. Do not replace, reinterpret, " +
+        "or invent objects. A short request must remain short and literal: for example, " +
+        "'гора' means 'a mountain', never food or noodles. If the request is one or two " +
+        "words, translate those words directly without adding a scene. If it describes " +
+        "a scene, preserve its subject, setting, style, colors, composition, and details. " +
+        "Return only the English image prompt, with no explanations, quotes, or markdown."
+    },
+    { role: "user", content: source }
+  ]);
+
+  const result = String(translated || "")
+    .replace(/^```(?:text)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!result) {
+    throw new Error("Не удалось правильно обработать русское описание изображения.");
+  }
+
+  console.log("Pinsk: русское описание изображения обработано.");
+  return result.slice(0, 2048);
+}
+
+
 async function imageGenerationHandler(req, res) {
   let reserved = false;
 
@@ -2560,7 +2605,8 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateCloudflareImage(prompt);
+    const imagePrompt = await prepareImagePrompt(prompt);
+    const result = await generateCloudflareImage(imagePrompt);
 
     res.json({
       success: true,
