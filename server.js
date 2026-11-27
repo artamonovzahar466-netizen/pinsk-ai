@@ -1,6 +1,5 @@
 
 
-
 "use strict";
 
 const express = require("express");
@@ -32,11 +31,40 @@ const CONFIGURED_GEMINI_MODEL = String(process.env.GEMINI_MODEL || "").trim();
 const MODEL = !CONFIGURED_GEMINI_MODEL || CONFIGURED_GEMINI_MODEL === "gemini-2.5-flash"
   ? "gemini-3.8-flash"
   : CONFIGURED_GEMINI_MODEL;
+const CONFIGURED_VISION_MODEL = String(process.env.GEMINI_VISION_MODEL || "").trim();
+const VISION_MODEL = !CONFIGURED_VISION_MODEL || CONFIGURED_VISION_MODEL === "gemini-2.5-flash"
+  ? "gemini-3.8-flash"
+  : CONFIGURED_VISION_MODEL;
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const CLOUDFLARE_ACCOUNT_ID =
   process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 const LIMITED_OWNER_EMAIL = "artomov.sergeij@gmail.com".toLowerCase();
+
+// Gemini 503/UNAVAILABLE means temporary model capacity pressure, not an invalid key.
+// Retry a few times with exponential backoff before key rotation gives up.
+async function fetchGeminiWithRetry(url, options) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const response = await fetch(url, options);
+    if (![429, 502, 503, 504].includes(response.status) || attempt === 3) {
+      return response;
+    }
+    const delay = Math.min(1000 * (2 ** attempt), 8000) + Math.floor(Math.random() * 350);
+    console.warn(`Gemini временно недоступен (HTTP ${response.status}); повтор ${attempt + 1}/3 через ${delay} мс.`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+}
+
+const AI_LANGUAGE_NAMES = {
+  "ru-RU": "русском языке",
+  "kk-KZ": "казахском языке",
+  "en-GB": "английском языке",
+  "fr-FR": "французском языке",
+  "es-ES": "испанском языке",
+  "it-IT": "итальянском языке",
+  "az-AZ": "азербайджанском языке",
+  "zh-CN": "упрощённом китайском языке"
+};
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL не задан. Проверь настройки Render.");
@@ -2081,18 +2109,13 @@ async function askAI(messages) {
     (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
   );
   const requestModel = hasVisualInput
-    ? (
-        !process.env.GEMINI_VISION_MODEL ||
-        String(process.env.GEMINI_VISION_MODEL).trim() === "gemini-2.5-flash"
-          ? "gemini-3.8-flash"
-          : String(process.env.GEMINI_VISION_MODEL).trim()
-      )
+    ? VISION_MODEL
     : MODEL;
 
   return executeWithKeyRotation(
     pool,
     async (apiKey, { signal }) => {
-      const response = await fetch(
+      const response = await fetchGeminiWithRetry(
         `https://generativelanguage.googleapis.com/v1beta/models/${requestModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
         {
           method: "POST",
@@ -2109,7 +2132,8 @@ async function askAI(messages) {
               : {}),
             contents,
             generationConfig: {
-              maxOutputTokens: 4096
+              // Website source is much longer than a normal chat reply.
+              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 4096
             }
           }),
           signal
@@ -2190,7 +2214,11 @@ app.post(
         "az-AZ": "азербайджанском",
         "zh-CN": "китайском (упрощённый)",
       };
-      const requestedVoiceLanguage = String(req.body.voiceLanguage || "ru-RU");
+      const requestedVoiceLanguage = String(req.body.voiceLanguage || req.body.language || "ru-RU");
+      const requestedResponseLanguage = isVoiceMode
+        ? requestedVoiceLanguage
+        : String(req.body.language || "ru-RU");
+      const responseLanguageInstruction = `Отвечай на ${AI_LANGUAGE_NAMES[requestedResponseLanguage] || "русском языке"}. Это обязательное предпочтение языка ответов Pinsk; соблюдай его, даже если пользователь пишет на другом языке, если он явно не попросил переключиться.`;
       const voiceLanguageInstruction = isVoiceMode
         ? `В голосовом режиме отвечай естественно и только на ${allowedVoiceLanguages[requestedVoiceLanguage] || "русском"} языке. Не переключайся на другой язык без просьбы пользователя.`
         : "";
@@ -2419,6 +2447,7 @@ app.post(
           role: "system",
           content:
             "Ты Pinsk — интеллектуальный ИИ-ассистент. " +
+            responseLanguageInstruction + "\n\n" +
             (voiceLanguageInstruction ? voiceLanguageInstruction + "\n\n" : "") +
             "Отвечай полезно, точно, естественно и на языке пользователя. " +
             "Сначала пойми конкретный вопрос пользователя и отвечай именно на него. " +
@@ -2520,13 +2549,13 @@ app.post(
 
       const status = error instanceof multer.MulterError
         ? 400
-        : ([429, 529].includes(error.status) ? 503 : 500);
+        : ([429, 502, 503, 504, 529].includes(error.status) ? 503 : 500);
 
       res.status(status).json({
         error: error instanceof multer.MulterError
           ? "Ошибка загрузки файла: " + error.message
           : status === 503
-            ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
+            ? "Gemini временно перегружен (HTTP 503/UNAVAILABLE). API-ключи могут быть исправны; сервер уже повторил запрос. Попробуй ещё раз через минуту."
             : "Ошибка ИИ-сервера. Проверь настройки модели и API."
       });
     }
@@ -2538,15 +2567,16 @@ app.post(
 // IMAGE PROMPT TRANSLATION
 // ==========================================
 
-async function translateImagePrompt(prompt) {
+async function translateImagePrompt(prompt, language = "ru-RU") {
   const source = String(prompt || "").trim();
 
   if (!source) {
     throw new Error("Пустое описание изображения.");
   }
 
-  // Английский текст уже подходит Cloudflare Workers AI — не тратим время на лишний вызов Gemini.
-  if (!/[\u0400-\u04FF]/.test(source)) {
+  // English prompts can go straight to the image model. Other selected languages
+  // are translated for visual understanding, while requested visible wording stays intact.
+  if (language === "en-GB" && !/[\u0400-\u04FF]/.test(source)) {
     return source.slice(0, 2048);
   }
 
@@ -2557,7 +2587,7 @@ async function translateImagePrompt(prompt) {
     answer = await executeWithKeyRotation(
       pool,
       async (apiKey, { signal }) => {
-        const response = await fetch(
+        const response = await fetchGeminiWithRetry(
           `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
           {
             method: "POST",
@@ -2566,103 +2596,12 @@ async function translateImagePrompt(prompt) {
               systemInstruction: {
                 parts: [{
                   text:
-                    "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
+                    "Translate the user's image description into concise, accurate English for an image model. " +
                     "Preserve all requested objects, composition, style, colors and details. " +
-                    "Do not add anything. Return only the English prompt."
-                }]
-              },
-              contents: [{
-                role: "user",
-                parts: [{ text: source }]
-              }],
-              generationConfig: {
-                temperature: 0.1,
-                maxOutputTokens: 512
-              }
-            }),
-            signal
-          }
-        );
-
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          const error = new Error(
-            data?.error?.message || `Gemini API вернул HTTP ${response.status}`
-          );
-          error.status = response.status;
-          throw error;
-        }
-
-        const translated = (data.candidates?.[0]?.content?.parts || [])
-          .filter(part => typeof part.text === "string")
-          .map(part => part.text)
-          .join("\n")
-          .trim();
-
-        if (!translated) {
-          throw new Error("Gemini не смог перевести описание изображения.");
-        }
-
-        return translated;
-      }
-    );
-  } catch (error) {
-    // Не блокируем создание изображения из-за временной перегрузки Gemini.
-    console.warn(
-      "Pinsk: перевод промпта через Gemini недоступен, отправляем исходное описание:",
-      error.message
-    );
-    return source.slice(0, 2048);
-  }
-
-  const translated = String(answer || "")
-    .replace(/```[\s\S]*?```/g, text => text.replace(/```/g, ""))
-    .trim()
-    .replace(/^["']|["']$/g, "");
-
-  if (!translated) {
-    throw new Error("Не удалось перевести описание изображения.");
-  }
-
-  return translated.slice(0, 2048);
-}
-
-
-// ==========================================
-// IMAGE PROMPT TRANSLATION
-// ==========================================
-
-async function translateImagePrompt(prompt) {
-  const source = String(prompt || "").trim();
-
-  if (!source) {
-    throw new Error("Пустое описание изображения.");
-  }
-
-  // Английский текст уже подходит Cloudflare Workers AI — не тратим время на лишний вызов Gemini.
-  if (!/[\u0400-\u04FF]/.test(source)) {
-    return source.slice(0, 2048);
-  }
-
-  // Для русского текста используем короткий специализированный запрос,
-  // а не общий askAI с лимитом ответа в 4096 токенов.
-  let answer;
-  try {
-    answer = await executeWithKeyRotation(
-      pool,
-      async (apiKey, { signal }) => {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              systemInstruction: {
-                parts: [{
-                  text:
-                    "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
-                    "Preserve all requested objects, composition, style, colors and details. " +
-                    "Do not add anything. Return only the English prompt."
+                    "If the prompt asks for visible words, signs, labels, captions or lettering, " +
+                    "preserve the exact requested wording and keep it in the user's selected language (" +
+                    (AI_LANGUAGE_NAMES[language] || "русском языке") + "). Never translate visible text into English. " +
+                    "Do not invent extra text. Return only the English visual prompt, with exact visible text clearly quoted."
                 }]
               },
               contents: [{
@@ -2815,6 +2754,7 @@ async function imageGenerationHandler(req, res) {
     const prompt = String(
       req.body.prompt || req.body.message || ""
     ).trim();
+    const language = String(req.body.language || "ru-RU");
 
     if (!prompt) {
       return res.status(400).json({
@@ -2850,7 +2790,7 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const imagePrompt = await translateImagePrompt(prompt);
+    const imagePrompt = await translateImagePrompt(prompt, language);
     const result = await generateCloudflareImage(imagePrompt);
 
     res.json({
@@ -2913,6 +2853,8 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
   try {
     const prompt = String(req.body.prompt || "").trim();
+    const language = String(req.body.language || "ru-RU");
+    const designLanguageInstruction = `Весь видимый текст сайта (заголовки, кнопки, меню, подписи, сообщения, формы и примеры) пиши на ${AI_LANGUAGE_NAMES[language] || "русском языке"}. Не используй английский для текста интерфейса, если выбран другой язык. Имена брендов и технические идентификаторы не переводи.`;
 
     if (!prompt) {
       return res.status(400).json({ error: "Опиши сайт, который нужно создать." });
@@ -2941,6 +2883,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
         role: "system",
         content:
           "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
+          designLanguageInstruction + " " +
           "Создавай законченные, адаптивные, визуально качественные сайты. " +
           "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
           "html — только содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
@@ -2985,10 +2928,10 @@ app.post("/api/design/generate", auth, async (req, res) => {
       await releaseMessage(req.user.id).catch(() => {});
     }
 
-    const status = [429, 529].includes(error.status) ? 503 : 500;
+    const status = [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
     return res.status(status).json({
       error: status === 503
-        ? "ИИ временно перегружен. Попробуй создать сайт позже."
+        ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Это не означает, что API-ключи недействительны. Сервер автоматически повторил запрос; попробуй ещё раз через минуту."
         : error.message || "Не удалось создать сайт. Попробуй изменить описание."
     });
   }
@@ -3151,6 +3094,7 @@ async function startServer() {
       console.log("Порт:", PORT);
       console.log("База данных: Supabase PostgreSQL");
       console.log("Модель чата:", MODEL);
+      console.log("Модель анализа изображений:", VISION_MODEL);
       console.log("Модель изображений:", IMAGE_MODEL);
       console.log("OWNER:", OWNER_EMAIL);
       console.log("Gemini API-ключей:", keys.length);
