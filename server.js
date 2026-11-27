@@ -12,6 +12,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
+const nodemailer = require("nodemailer");
 
 const {
   initGeminiKeysTable,
@@ -53,18 +54,26 @@ pool.on("error", error => {
 
 
 // ==========================================
-// RESEND EMAIL API
+// GMAIL SMTP EMAIL
 // ==========================================
 
 async function sendVerificationEmail(email, code) {
-  const apiKey = process.env.RESEND_API_KEY;
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = String(process.env.SMTP_USER || "").trim();
+  const pass = String(process.env.SMTP_PASS || "").replace(/\s+/g, "");
 
-  if (!apiKey) {
-    throw new Error("RESEND_API_KEY не настроен в Render.");
+  if (!user || !pass) {
+    throw new Error(
+      "SMTP_USER или SMTP_PASS не настроен в Render. Проверь настройки Gmail SMTP."
+    );
   }
 
-  const from = process.env.RESEND_FROM ||
-    "Pinsk AI <onboarding@resend.dev>";
+  if (![465, 587].includes(port)) {
+    throw new Error("SMTP_PORT должен быть 465 или 587.");
+  }
+
+  const from = process.env.SMTP_FROM || `Pinsk AI <${user}>`;
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
@@ -78,32 +87,26 @@ async function sendVerificationEmail(email, code) {
     </div>
   `;
 
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject: "Код подтверждения Pinsk AI",
-      text:
-        `Твой код подтверждения Pinsk AI: ${code}\n\n` +
-        "Код действует 10 минут.\n" +
-        "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
-      html
-    }),
-    signal: AbortSignal.timeout(20000)
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000
   });
 
-  const result = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(
-      result.message || result.error || `Resend HTTP ${response.status}`
-    );
-  }
+  const result = await transporter.sendMail({
+    from,
+    to: email,
+    subject: "Код подтверждения Pinsk AI",
+    text:
+      `Твой код подтверждения Pinsk AI: ${code}\n\n` +
+      "Код действует 10 минут.\n" +
+      "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
+    html
+  });
 
   return result;
 }
@@ -2755,8 +2758,6 @@ app.post("/api/design/generate", auth, async (req, res) => {
 // ==========================================
 
 app.post("/api/analysis", auth, async (req, res) => {
-  let messageReserved = false;
-
   try {
     const content = String(req.body.content || "").trim();
 
@@ -2777,26 +2778,6 @@ app.post("/api/analysis", auth, async (req, res) => {
       });
     }
 
-    // Data analysis consumes one message from the FREE daily allowance.
-    // PRO and OWNER remain unlimited.
-    const limits = limitsFor(req.user);
-
-    if (limits.messages !== Infinity) {
-      messageReserved = await reserveMessage(req.user.id);
-
-      if (!messageReserved) {
-        const usage = await getUsage(req.user.id);
-
-        return res.status(429).json({
-          error: "Дневной лимит сообщений исчерпан.",
-          code: "DAILY_LIMIT_REACHED",
-          plan: req.user.role,
-          used: usage.messages,
-          limit: limits.messages
-        });
-      }
-    }
-
     const answer = await askAI([
       {
         role: "system",
@@ -2814,16 +2795,11 @@ app.post("/api/analysis", auth, async (req, res) => {
 
     res.json({
       success: true,
-      answer,
-      usage: await getUsage(req.user.id)
+      answer
     });
 
   } catch (error) {
     console.error("Data analysis error:", error.message);
-
-    if (messageReserved) {
-      await releaseMessage(req.user.id).catch(() => {});
-    }
 
     const status = [429, 529].includes(error.status) ? 503 : 500;
 
@@ -2961,3 +2937,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
