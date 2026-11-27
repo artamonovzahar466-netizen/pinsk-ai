@@ -1,5 +1,12 @@
 
 
+
+
+
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -2529,7 +2536,13 @@ async function translateImagePrompt(prompt) {
 // ==========================================
 
 async function generateHordeImage(prompt) {
-  const apiKey = process.env.AI_HORDE_API_KEY || "0000000000";
+  const apiKey = String(process.env.AI_HORDE_API_KEY || "").trim();
+
+  if (!apiKey) {
+    throw new Error(
+      "AI_HORDE_API_KEY не настроен в Render. Добавь API-ключ AI Horde в Environment."
+    );
+  }
 
   const headers = {
     "Content-Type": "application/json",
@@ -2545,9 +2558,11 @@ async function generateHordeImage(prompt) {
       body: JSON.stringify({
         prompt: String(prompt).slice(0, 2048),
         params: {
-          width: 512,
-          height: 512,
-          steps: 18,
+          // При высокой нагрузке AI Horde требует kudos для больших изображений.
+          // 256x256 остаётся ниже порога 263x263 из ответа провайдера.
+          width: 256,
+          height: 256,
+          steps: 12,
           n: 1,
           cfg_scale: 7,
           sampler_name: "k_euler",
@@ -2732,6 +2747,22 @@ async function imageGenerationHandler(req, res) {
     if (reserved) {
       await releaseCounter(req.user.id, "images", 1)
         .catch(() => {});
+    }
+
+    const errorMessage = String(error.message || "");
+
+    if (/kudos|requires? .*kudos|needs? .*kudos/i.test(errorMessage)) {
+      return res.status(503).json({
+        error: "Даже для уменьшенного изображения AI Horde сейчас требует kudos. Проверь баланс API-ключа или попробуй позже.",
+        code: "AI_HORDE_KUDOS_REQUIRED"
+      });
+    }
+
+    if (/AI_HORDE_API_KEY не настроен/i.test(errorMessage)) {
+      return res.status(503).json({
+        error: "Не настроен API-ключ AI Horde. Добавь AI_HORDE_API_KEY в переменные окружения Render.",
+        code: "AI_HORDE_NOT_CONFIGURED"
+      });
     }
 
     const status = error.name === "TimeoutError" || error.status === 429
