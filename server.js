@@ -2755,6 +2755,8 @@ app.post("/api/design/generate", auth, async (req, res) => {
 // ==========================================
 
 app.post("/api/analysis", auth, async (req, res) => {
+  let messageReserved = false;
+
   try {
     const content = String(req.body.content || "").trim();
 
@@ -2775,6 +2777,26 @@ app.post("/api/analysis", auth, async (req, res) => {
       });
     }
 
+    // Data analysis consumes one message from the FREE daily allowance.
+    // PRO and OWNER remain unlimited.
+    const limits = limitsFor(req.user);
+
+    if (limits.messages !== Infinity) {
+      messageReserved = await reserveMessage(req.user.id);
+
+      if (!messageReserved) {
+        const usage = await getUsage(req.user.id);
+
+        return res.status(429).json({
+          error: "Дневной лимит сообщений исчерпан.",
+          code: "DAILY_LIMIT_REACHED",
+          plan: req.user.role,
+          used: usage.messages,
+          limit: limits.messages
+        });
+      }
+    }
+
     const answer = await askAI([
       {
         role: "system",
@@ -2792,11 +2814,16 @@ app.post("/api/analysis", auth, async (req, res) => {
 
     res.json({
       success: true,
-      answer
+      answer,
+      usage: await getUsage(req.user.id)
     });
 
   } catch (error) {
     console.error("Data analysis error:", error.message);
+
+    if (messageReserved) {
+      await releaseMessage(req.user.id).catch(() => {});
+    }
 
     const status = [429, 529].includes(error.status) ? 503 : 500;
 
