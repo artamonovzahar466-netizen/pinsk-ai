@@ -41,6 +41,7 @@ button {
   height: 100dvh;
   min-height: 0;
   width: 100%;
+  overflow: hidden;
 }
 
 /* SIDEBAR */
@@ -49,6 +50,7 @@ button {
   position: sticky;
   top: 0;
   align-self: flex-start;
+  flex: 0 0 260px;
   width: 260px;
   min-width: 260px;
   height: 100vh;
