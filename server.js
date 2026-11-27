@@ -2564,7 +2564,11 @@ async function generateHordeImage(prompt) {
         nsfw: false,
         censor_nsfw: true,
         trusted_workers: false,
-        slow_workers: false,
+        // Разрешаем медленным исполнителям брать задачу: это снижает требования к kudos.
+        slow_workers: true,
+        // Разрешаем AI Horde автоматически уменьшать параметры,
+        // если исходный запрос не проходит по доступному балансу kudos.
+        allow_downgrade: true,
         r2: true,
         shared: false
       }),
