@@ -12,7 +12,6 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
-// Gmail API uses Node.js built-in fetch; no extra package required.
 
 const {
   initGeminiKeysTable,
@@ -29,10 +28,9 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
-const CLOUDFLARE_ACCOUNT_ID =
-  process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
+const IMAGE_MODEL = "AI Horde";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
+const LIMITED_OWNER_EMAIL = "artomov.sergeij@gmail.com".toLowerCase();
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL не задан. Проверь настройки Render.");
@@ -54,45 +52,18 @@ pool.on("error", error => {
 
 
 // ==========================================
-// GMAIL API EMAIL
+// RESEND EMAIL API
 // ==========================================
 
 async function sendVerificationEmail(email, code) {
-  const clientId = String(process.env.GOOGLE_CLIENT_ID || "").trim();
-  const clientSecret = String(process.env.GOOGLE_CLIENT_SECRET || "").trim();
-  const refreshToken = String(process.env.GOOGLE_REFRESH_TOKEN || "").trim();
-  const gmailUser = String(process.env.GMAIL_USER || "").trim();
+  const apiKey = process.env.RESEND_API_KEY;
 
-  if (!clientId || !clientSecret || !refreshToken || !gmailUser) {
-    throw new Error(
-      "Не настроены GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN или GMAIL_USER в Render."
-    );
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY не настроен в Render.");
   }
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("Некорректный адрес получателя.");
-  }
-
-  // Получаем новый access token по сохранённому refresh token.
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token"
-    })
-  });
-
-  const tokenData = await tokenResponse.json().catch(() => ({}));
-
-  if (!tokenResponse.ok || !tokenData.access_token) {
-    console.error("Gmail OAuth token error:", tokenData);
-    throw new Error(
-      `Не удалось получить Gmail access token: ${tokenData.error_description || tokenData.error || tokenResponse.status}`
-    );
-  }
+  const from = process.env.RESEND_FROM ||
+    "Pinsk AI <onboarding@resend.dev>";
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
@@ -102,76 +73,38 @@ async function sendVerificationEmail(email, code) {
         ${code}
       </div>
       <p>Код действует <b>10 минут</b>.</p>
-      <p style="color:#777;font-size:13px">
-        Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.
-      </p>
+      <p style="color:#777;font-size:13px">Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.</p>
     </div>
   `;
 
-  const plainText =
-    `Твой код подтверждения Pinsk AI: ${code}\n\n` +
-    "Код действует 10 минут.\n" +
-    "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.";
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: "Код подтверждения Pinsk AI",
+      text:
+        `Твой код подтверждения Pinsk AI: ${code}\n\n` +
+        "Код действует 10 минут.\n" +
+        "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
+      html
+    }),
+    signal: AbortSignal.timeout(20000)
+  });
 
-  const boundary = "pinsk_" + crypto.randomBytes(12).toString("hex");
+  const result = await response.json().catch(() => ({}));
 
-  const encodeBase64 = value => {
-    const lines = Buffer.from(value, "utf8")
-      .toString("base64")
-      .match(/.{1,76}/g);
-    return (lines || []).join("\r\n");
-  };
-
-  const subject = Buffer.from(
-    "Код подтверждения Pinsk AI",
-    "utf8"
-  ).toString("base64");
-
-  const message = [
-    `From: Pinsk AI <${gmailUser}>`,
-    `To: ${email}`,
-    `Subject: =?UTF-8?B?${subject}?=`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    encodeBase64(plainText),
-    `--${boundary}`,
-    "Content-Type: text/html; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    encodeBase64(html),
-    `--${boundary}--`
-  ].join("\r\n");
-
-  const raw = Buffer.from(message, "utf8").toString("base64url");
-
-  const sendResponse = await fetch(
-    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ raw })
-    }
-  );
-
-  const sendData = await sendResponse.json().catch(() => ({}));
-
-  if (!sendResponse.ok || !sendData.id) {
-    console.error("Gmail API send error:", sendData);
+  if (!response.ok) {
     throw new Error(
-      `Gmail API не отправил письмо: ${sendData.error?.message || sendResponse.status}`
+      result.message || result.error || `Resend HTTP ${response.status}`
     );
   }
 
-  console.log("Pinsk: письмо отправлено через Gmail API:", sendData.id);
-  return sendData;
+  return result;
 }
 
 
@@ -335,6 +268,12 @@ async function initializeDatabase() {
     SET role = 'OWNER'
     WHERE LOWER(email) = LOWER($1)
   `, [OWNER_EMAIL]);
+
+  await pool.query(`
+    UPDATE users
+    SET role = 'PRO'
+    WHERE LOWER(email) = LOWER($1)
+  `, [LIMITED_OWNER_EMAIL]);
 
   await initGeminiKeysTable(pool);
 
@@ -661,6 +600,17 @@ async function auth(req, res, next) {
       user.role = "OWNER";
     }
 
+    if (
+      user.email.toLowerCase() === LIMITED_OWNER_EMAIL &&
+      user.role !== "PRO"
+    ) {
+      await pool.query(
+        "UPDATE users SET role = 'PRO' WHERE id = $1",
+        [user.id]
+      );
+      user.role = "PRO";
+    }
+
     if (Number(user.is_blocked) === 1) {
       await pool.query(
         "DELETE FROM sessions WHERE user_id = $1",
@@ -920,7 +870,12 @@ app.post("/api/auth/verify-email", async (req, res) => {
     }
 
     const userId = crypto.randomUUID();
-    const userRole = email === OWNER_EMAIL ? "OWNER" : "FREE";
+    const userRole =
+      email === OWNER_EMAIL
+        ? "OWNER"
+        : email === LIMITED_OWNER_EMAIL
+          ? "PRO"
+          : "FREE";
 
     const inserted = await client.query(`
       INSERT INTO users (
@@ -1095,6 +1050,17 @@ app.post("/api/auth/login", async (req, res) => {
       );
 
       user.role = "OWNER";
+    }
+
+    if (
+      email === LIMITED_OWNER_EMAIL &&
+      user.role !== "PRO"
+    ) {
+      await pool.query(
+        "UPDATE users SET role = 'PRO' WHERE id = $1",
+        [user.id]
+      );
+      user.role = "PRO";
     }
 
     await issueSession(user, res, req);
@@ -1577,7 +1543,7 @@ app.get("/api/status", async (req, res) => {
       imageModel: IMAGE_MODEL,
       apiKeyConfigured: keys.some(isKeyActive),
       uploadsEnabled: true,
-      imageGenerationEnabled: Boolean(process.env.CLOUDFLARE_API_TOKEN),
+      imageGenerationEnabled: true,
       webSearchEnabled: Boolean(process.env.TAVILY_API_KEY)
     });
   } catch (error) {
@@ -2068,7 +2034,7 @@ function convertToGeminiContents(messages) {
     .filter(message => message.parts.length > 0);
 }
 
-async function askAI(messages, generationConfig = {}) {
+async function askAI(messages) {
   const systemText = messages
     .filter(message => message.role === "system")
     .map(message => typeof message.content === "string"
@@ -2104,8 +2070,7 @@ async function askAI(messages, generationConfig = {}) {
               : {}),
             contents,
             generationConfig: {
-              maxOutputTokens: 4096,
-              ...generationConfig
+              maxOutputTokens: 4096
             }
           }),
           signal
@@ -2500,135 +2465,245 @@ app.post(
 
 
 // ==========================================
-// CLOUDFLARE WORKERS AI — IMAGE GENERATION
+// IMAGE PROMPT TRANSLATION
 // ==========================================
 
-async function generateCloudflareImage(prompt) {
-  const apiToken = String(
-    process.env.CLOUDFLARE_API_TOKEN || ""
-  ).trim();
-
-  const accountId = String(CLOUDFLARE_ACCOUNT_ID || "").trim();
-
-  if (!apiToken) {
-    const error = new Error(
-      "CLOUDFLARE_API_TOKEN не настроен в Render."
-    );
-    error.status = 503;
-    throw error;
-  }
-
-  if (!accountId) {
-    const error = new Error(
-      "CLOUDFLARE_ACCOUNT_ID не настроен в Render."
-    );
-    error.status = 503;
-    throw error;
-  }
-
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${IMAGE_MODEL}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        prompt: String(prompt).slice(0, 2048),
-        steps: 4
-      }),
-      signal: AbortSignal.timeout(180000)
-    }
-  );
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || data.success === false) {
-    const providerError =
-      data?.errors?.map(item => item.message).join("; ") ||
-      data?.error?.message ||
-      `Cloudflare Workers AI HTTP ${response.status}`;
-
-    const error = new Error(providerError);
-    error.status = response.status || 500;
-
-    console.error("Cloudflare Workers AI:", providerError);
-
-    throw error;
-  }
-
-  const imageData = data?.result?.image;
-
-  if (typeof imageData !== "string" || !imageData) {
-    throw new Error(
-      "Cloudflare Workers AI не вернул готовое изображение."
-    );
-  }
-
-  const imageBuffer = Buffer.from(imageData, "base64");
-
-  if (
-    !imageBuffer.length ||
-    imageBuffer.length > 20 * 1024 * 1024
-  ) {
-    throw new Error(
-      "Cloudflare вернул изображение некорректного размера."
-    );
-  }
-
-  return {
-    mimeType: "image/png",
-    data: imageData,
-    text: ""
-  };
-}
-
-
-// ==========================================
-// MULTILINGUAL IMAGE PROMPT UNDERSTANDING
-// ==========================================
-
-async function prepareImagePrompt(prompt) {
+async function translateImagePrompt(prompt) {
   const source = String(prompt || "").trim();
 
-  // English prompts already work well with FLUX: do not add an extra API call.
-  // For Russian and other Cyrillic prompts, convert the meaning into a precise
-  // visual prompt before sending it to the image model.
-  if (!/[\u0400-\u04FF]/u.test(source)) {
-    return source;
+  if (!source) {
+    throw new Error("Пустое описание изображения.");
   }
 
-  const translated = await askAI([
-    {
-      role: "system",
-      content:
-        "You are a professional image-prompt translator for the FLUX image model. " +
-        "Translate the user's image request into clear, natural English. " +
-        "Preserve the exact meaning and every named object. Do not replace, reinterpret, " +
-        "or invent objects. A short request must remain short and literal: for example, " +
-        "'гора' means 'a mountain', never food or noodles. If the request is one or two " +
-        "words, translate those words directly without adding a scene. If it describes " +
-        "a scene, preserve its subject, setting, style, colors, composition, and details. " +
-        "Return only the English image prompt, with no explanations, quotes, or markdown."
-    },
-    { role: "user", content: source }
-  ]);
+  // Английский текст уже подходит AI Horde — не тратим время на лишний вызов Gemini.
+  if (!/[\u0400-\u04FF]/.test(source)) {
+    return source.slice(0, 2048);
+  }
 
-  const result = String(translated || "")
-    .replace(/^```(?:text)?\s*/i, "")
-    .replace(/\s*```$/i, "")
+  // Для русского текста используем короткий специализированный запрос,
+  // а не общий askAI с лимитом ответа в 4096 токенов.
+  let answer;
+  try {
+    answer = await executeWithKeyRotation(
+      pool,
+      async (apiKey, { signal }) => {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{
+                  text:
+                    "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
+                    "Preserve all requested objects, composition, style, colors and details. " +
+                    "Do not add anything. Return only the English prompt."
+                }]
+              },
+              contents: [{
+                role: "user",
+                parts: [{ text: source }]
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 512
+              }
+            }),
+            signal
+          }
+        );
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(
+            data?.error?.message || `Gemini API вернул HTTP ${response.status}`
+          );
+          error.status = response.status;
+          throw error;
+        }
+
+        const translated = (data.candidates?.[0]?.content?.parts || [])
+          .filter(part => typeof part.text === "string")
+          .map(part => part.text)
+          .join("\n")
+          .trim();
+
+        if (!translated) {
+          throw new Error("Gemini не смог перевести описание изображения.");
+        }
+
+        return translated;
+      }
+    );
+  } catch (error) {
+    // Не блокируем создание изображения из-за временной перегрузки Gemini.
+    console.warn(
+      "Pinsk: перевод промпта через Gemini недоступен, отправляем исходное описание:",
+      error.message
+    );
+    return source.slice(0, 2048);
+  }
+
+  const translated = String(answer || "")
+    .replace(/```[\s\S]*?```/g, text => text.replace(/```/g, ""))
     .trim()
     .replace(/^["']|["']$/g, "");
 
-  if (!result) {
-    throw new Error("Не удалось правильно обработать русское описание изображения.");
+  if (!translated) {
+    throw new Error("Не удалось перевести описание изображения.");
   }
 
-  console.log("Pinsk: русское описание изображения обработано.");
-  return result.slice(0, 2048);
+  return translated.slice(0, 2048);
 }
 
+
+// ==========================================
+// AI HORDE IMAGE GENERATION
+// ==========================================
+
+async function generateHordeImage(prompt) {
+  const apiKey = process.env.AI_HORDE_API_KEY || "0000000000";
+
+  const headers = {
+    "Content-Type": "application/json",
+    apikey: apiKey,
+    "Client-Agent": "PinskAI:1.0:artamonovzahar466@gmail.com"
+  };
+
+  const submitResponse = await fetch(
+    "https://aihorde.net/api/v2/generate/async",
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: String(prompt).slice(0, 2048),
+        params: {
+          width: 512,
+          height: 512,
+          steps: 18,
+          n: 1,
+          cfg_scale: 7,
+          sampler_name: "k_euler",
+          karras: true
+        },
+        nsfw: false,
+        censor_nsfw: true,
+        trusted_workers: false,
+        slow_workers: false,
+        r2: true,
+        shared: false
+      }),
+      signal: AbortSignal.timeout(30000)
+    }
+  );
+
+  const submitData = await submitResponse.json().catch(() => ({}));
+
+  if (!submitResponse.ok || !submitData.id) {
+    throw new Error(
+      submitData.message ||
+      `AI Horde: ошибка запуска генерации (${submitResponse.status})`
+    );
+  }
+
+  const requestId = submitData.id;
+  let finished = false;
+
+  for (let attempt = 0; attempt < 80; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    const checkResponse = await fetch(
+      `https://aihorde.net/api/v2/generate/check/${requestId}`,
+      {
+        headers,
+        signal: AbortSignal.timeout(20000)
+      }
+    );
+
+    const checkData = await checkResponse.json().catch(() => ({}));
+
+    if (!checkResponse.ok) {
+      throw new Error("AI Horde: не удалось проверить статус генерации.");
+    }
+
+    if (checkData.faulted) {
+      throw new Error("AI Horde: генерация завершилась с ошибкой.");
+    }
+
+    if (checkData.done) {
+      finished = true;
+      break;
+    }
+  }
+
+  if (!finished) {
+    throw new Error("AI Horde: генерация не завершилась за 4 минуты. Очередь может быть перегружена — попробуй ещё раз позже.");
+  }
+
+  const statusResponse = await fetch(
+    `https://aihorde.net/api/v2/generate/status/${requestId}`,
+    {
+      headers,
+      signal: AbortSignal.timeout(30000)
+    }
+  );
+
+  const statusData = await statusResponse.json().catch(() => ({}));
+
+  if (!statusResponse.ok) {
+    throw new Error("AI Horde: не удалось получить готовое изображение.");
+  }
+
+  const imageUrl = statusData?.generations?.[0]?.img;
+
+  if (typeof imageUrl !== "string" || !imageUrl) {
+    throw new Error("AI Horde не вернул изображение.");
+  }
+
+  if (imageUrl.startsWith("data:image/")) {
+    const match = imageUrl.match(
+      /^data:(image\/[^;]+);base64,(.+)$/
+    );
+
+    if (!match) {
+      throw new Error("AI Horde вернул некорректное изображение.");
+    }
+
+    return {
+      mimeType: match[1],
+      data: match[2],
+      text: ""
+    };
+  }
+
+  const imageResponse = await fetch(imageUrl, {
+    signal: AbortSignal.timeout(60000)
+  });
+
+  if (!imageResponse.ok) {
+    throw new Error("Не удалось загрузить готовое изображение AI Horde.");
+  }
+
+  const contentType = imageResponse.headers.get("content-type") ||
+    "image/png";
+
+  if (!contentType.startsWith("image/")) {
+    throw new Error("AI Horde вернул файл неподдерживаемого формата.");
+  }
+
+  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+
+  if (!imageBuffer.length || imageBuffer.length > 15 * 1024 * 1024) {
+    throw new Error("Размер изображения некорректен.");
+  }
+
+  return {
+    mimeType: contentType.split(";")[0],
+    data: imageBuffer.toString("base64"),
+    text: ""
+  };
+}
 
 async function imageGenerationHandler(req, res) {
   let reserved = false;
@@ -2672,8 +2747,9 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const imagePrompt = await prepareImagePrompt(prompt);
-    const result = await generateCloudflareImage(imagePrompt);
+    const imagePrompt = await translateImagePrompt(prompt);
+
+    const result = await generateHordeImage(imagePrompt);
 
     res.json({
       success: true,
@@ -2685,30 +2761,21 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error(
-      "Cloudflare Workers AI image generation error:",
-      error.message
-    );
+    console.error("AI Horde image generation error:", error.message);
 
     if (reserved) {
       await releaseCounter(req.user.id, "images", 1)
         .catch(() => {});
     }
 
-    const status =
-      error.name === "TimeoutError" ||
-      error.name === "AbortError" ||
-      error.status === 429 ||
-      error.status === 401 ||
-      error.status === 403 ||
-      (error.status >= 500 && error.status <= 599)
-        ? 503
-        : 500;
+    const status = error.name === "TimeoutError" || error.status === 429
+      ? 503
+      : 500;
 
     res.status(status).json({
       error: status === 503
-        ? "Cloudflare Workers AI временно недоступен, превышен лимит или не хватает разрешений. Попробуй позже."
-        : "Не удалось создать изображение. Проверь описание и настройки Cloudflare."
+        ? "AI Horde занят или не успел создать изображение. Попробуй позже."
+        : "Не удалось создать изображение. Попробуй изменить описание."
     });
   }
 }
@@ -2775,45 +2842,25 @@ app.post("/api/design/generate", auth, async (req, res) => {
         role: "user",
         content: "Создай сайт по этому заданию.\n\n" + prompt
       }
-    ], {
-      responseMimeType: "application/json",
-      maxOutputTokens: 8192
-    });
+    ]);
 
     let generated;
     try {
-      let cleaned = String(answer || "").trim();
-      cleaned = cleaned
+      const cleaned = String(answer)
         .replace(/^```(?:json)?\s*/i, "")
         .replace(/\s*```$/i, "")
         .trim();
-
-      // Иногда модель оборачивает JSON в поясняющий текст — извлекаем объект.
       const start = cleaned.indexOf("{");
       const end = cleaned.lastIndexOf("}");
-      if (start < 0 || end <= start) {
-        throw new Error("JSON object not found");
-      }
-
+      if (start < 0 || end <= start) throw new Error("JSON not found");
       generated = JSON.parse(cleaned.slice(start, end + 1));
-
-      // Поддерживаем альтернативную вложенную структуру ответа.
-      if (generated && generated.project && typeof generated.project === "object") {
-        generated = generated.project;
-      }
-
-      if (!generated || typeof generated !== "object" || Array.isArray(generated)) {
-        throw new Error("Invalid project object");
-      }
-    } catch (parseError) {
-      console.error("Design Studio JSON parse error:", parseError.message);
-      console.error("Design Studio response preview:", String(answer || "").slice(0, 1200));
-      throw new Error("Gemini вернул неполный или некорректный проект. Попробуй сократить описание сайта.");
+    } catch {
+      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
     }
 
-    const html = String(generated.html || generated.HTML || "").slice(0, 120000);
-    const css = String(generated.css || generated.CSS || "").slice(0, 120000);
-    const js = String(generated.js || generated.javascript || generated.JS || "").slice(0, 120000);
+    const html = String(generated.html || "").slice(0, 120000);
+    const css = String(generated.css || "").slice(0, 120000);
+    const js = String(generated.js || "").slice(0, 120000);
 
     if (!html.trim()) {
       throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
@@ -2977,7 +3024,7 @@ async function startServer() {
       console.log("Порт:", PORT);
       console.log("База данных: Supabase PostgreSQL");
       console.log("Модель чата:", MODEL);
-      console.log("Модель изображений Cloudflare:", IMAGE_MODEL);
+      console.log("Модель изображений:", IMAGE_MODEL);
       console.log("OWNER:", OWNER_EMAIL);
       console.log("Gemini API-ключей:", keys.length);
       console.log("Активных Gemini API-ключей:", activeKeys);
