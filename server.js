@@ -1,10 +1,5 @@
 
 
-
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -2130,87 +2125,8 @@ async function askAI(messages) {
 }
 
 
-// ==========================================
-// VOICE MODE — NATURAL CLOUD TTS
-// ==========================================
-
-app.post("/api/voice/speech", auth, async (req, res) => {
-  try {
-    const text = String(req.body?.text || "").trim().slice(0, 12000);
-    const language = String(req.body?.language || "ru").toLowerCase().startsWith("en") ? "en" : "ru";
-    const allowedVoices = new Set([
-      "pNInz6obpgDQGcFmaJgB", // Adam
-      "ErXwobaYiN019PkySvjV", // Antoni
-      "21m00Tcm4TlvDq8ikWAM"  // Rachel
-    ]);
-    const requestedVoice = String(req.body?.voiceId || "pNInz6obpgDQGcFmaJgB");
-    const voiceId = allowedVoices.has(requestedVoice)
-      ? requestedVoice
-      : "pNInz6obpgDQGcFmaJgB";
-
-    if (!text) {
-      return res.status(400).json({ error: "Нет текста для озвучивания." });
-    }
-
-    const apiKey = String(process.env.ELEVENLABS_API_KEY || "").trim();
-    if (!apiKey) {
-      return res.status(503).json({
-        error: "ElevenLabs не настроен. Добавь ELEVENLABS_API_KEY в Render → Environment."
-      });
-    }
-
-    const ttsResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=mp3_44100_128`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": apiKey,
-          "Content-Type": "application/json",
-          "Accept": "audio/mpeg"
-        },
-        body: JSON.stringify({
-          text,
-          model_id: "eleven_flash_v2_5",
-          language_code: language,
-          voice_settings: {
-            stability: 0.48,
-            similarity_boost: 0.78,
-            style: 0.15,
-            use_speaker_boost: true
-          }
-        }),
-        signal: AbortSignal.timeout(90000)
-      }
-    );
-
-    if (!ttsResponse.ok) {
-      const errorText = await ttsResponse.text().catch(() => "");
-      console.error("ElevenLabs TTS error:", ttsResponse.status, errorText.slice(0, 1500));
-      let message = "ElevenLabs не смог создать голосовой ответ.";
-      try {
-        const parsed = JSON.parse(errorText);
-        message = parsed?.detail?.message || parsed?.detail?.status || parsed?.message || message;
-      } catch (_) {}
-      return res.status(ttsResponse.status).json({ error: message });
-    }
-
-    const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
-    if (!audioBuffer.length) {
-      throw new Error("ElevenLabs вернул пустой аудиофайл.");
-    }
-
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Length", String(audioBuffer.length));
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    return res.status(200).send(audioBuffer);
-  } catch (error) {
-    console.error("ElevenLabs voice error:", error.message);
-    return res.status(502).json({
-      error: "Не удалось создать голосовой ответ: " + error.message
-    });
-  }
-});
+// Голосовой вывод выполняется встроенной озвучкой браузера (SpeechSynthesis).
+// Внешний TTS-провайдер и API-ключ для голосового режима не требуются.
 
 // ==========================================
 // CHAT WITH FILES AND IMAGES
