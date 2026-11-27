@@ -1,14 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -50,7 +41,12 @@ let voiceActive = false;
 let voiceChatId = null;
 let voiceBusy = false;
 let voiceRecognitionStarting = false;
-let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "young";
+let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "ara";
+if (!["ara", "rex", "eve", "sal", "leo"].includes(selectedVoicePreset)) selectedVoicePreset = "ara";
+let voiceAudio = null;
+let voiceAudioUrl = null;
+let voicePlaybackResolve = null;
+let voiceSpeechAbort = null;
 let selectedAnalysisFile = null;
 
 let selectedFiles = [];
@@ -1389,7 +1385,6 @@ async function sendMessage(value, options = {}) {
   }
 
   if (options.voiceSession) {
-    appendVoiceLine("user", message);
     setVoiceStatus("Думаю над ответом...", "thinking");
   } else {
     renderMessage("user", message || "Проанализируй прикреплённые файлы.", {
@@ -1431,6 +1426,7 @@ async function sendMessage(value, options = {}) {
 
       formData.append("message", message || "Проанализируй прикреплённые файлы.");
       formData.append("conversationId", options.voiceSession ? (voiceChatId || makeId()) : (currentChatId || makeId()));
+      if (options.voiceSession) formData.append("voiceMode", "true");
 
       files.forEach(file => {
         formData.append("files", file, file.name);
@@ -1449,7 +1445,6 @@ async function sendMessage(value, options = {}) {
       const answer = data.answer || "Нет ответа.";
 
       if (options.voiceSession) {
-        appendVoiceLine("assistant", answer);
         if (options.speak) await speakAnswer(answer);
       } else {
         renderMessage("assistant", answer);
@@ -1457,7 +1452,7 @@ async function sendMessage(value, options = {}) {
       }
 
       await loadUsage();
-      await loadHistory();
+      if (!options.voiceSession) await loadHistory();
     }
 
     if (files.length) clearSelectedFiles();
@@ -1465,8 +1460,7 @@ async function sendMessage(value, options = {}) {
   } catch (error) {
     loading?.remove();
     if (options.voiceSession) {
-      appendVoiceLine("assistant", "Не удалось выполнить запрос: " + error.message);
-      setVoiceStatus("Не удалось получить ответ. Попробуй ещё раз.", "error");
+      setVoiceStatus("Не удалось получить ответ: " + error.message, "error");
     } else {
       renderMessage(
         "assistant",
@@ -1694,31 +1688,27 @@ function renderPageContent(page) {
         <div class="voice-heading">
           <div>
             <h2>Голосовой режим</h2>
-            <p>Разговаривай с Pinsk — он будет отвечать голосом.</p>
+            <p>Просто говори — Pinsk слушает и отвечает живым голосом.</p>
           </div>
           <div class="voice-live-indicator" id="voiceLiveIndicator"><span></span> Не подключён</div>
         </div>
 
-        <section class="voice-card">
+        <section class="voice-card voice-card-focus">
           <div class="voice-orb" id="voiceOrb"><span>✦</span></div>
           <div class="voice-status" id="voiceStatus">Нажми «Начать разговор» и разреши доступ к микрофону.</div>
           <label class="voice-select-label" for="voicePreset">Голос Pinsk</label>
           <select id="voicePreset" class="voice-select">
-            <option value="male">Мужской</option>
-            <option value="female">Женский</option>
-            <option value="robot">Робот</option>
-            <option value="young">Приятный молодой парень (≈18 лет)</option>
+            <option value="ara">Молодой и дружелюбный</option>
+            <option value="rex">Уверенный мужской</option>
+            <option value="eve">Энергичный</option>
+            <option value="sal">Спокойный и естественный</option>
+            <option value="leo">Низкий, уверенный</option>
           </select>
           <div class="voice-controls">
             <button class="primary-button voice-start-button" id="voiceStart">🎙 Начать разговор</button>
             <button class="secondary-button" id="voiceStop" disabled>Остановить</button>
           </div>
-          <div class="voice-hint">Говори после сигнала «Слушаю тебя». После каждого ответа Pinsk снова включит микрофон.</div>
-        </section>
-
-        <section class="voice-transcript-card">
-          <div class="voice-transcript-heading"><strong>Разговор</strong><button type="button" id="voiceClear" class="voice-clear-button">Очистить</button></div>
-          <div id="voiceTranscript" class="voice-transcript"><div class="voice-empty">Здесь появятся твои слова и ответы Pinsk.</div></div>
+          <div class="voice-hint">Это режим разговора, а не чат: текст переписки не показывается и не зачитывается. После ответа микрофон включится снова.</div>
         </section>
       </div>
     `;
@@ -1729,14 +1719,11 @@ function renderPageContent(page) {
       preset.addEventListener("change", () => {
         selectedVoicePreset = preset.value;
         localStorage.setItem("pinsk_voice_preset", selectedVoicePreset);
-        if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+        if (voiceAudio) voiceAudio.pause();
       });
     }
     $("voiceStart")?.addEventListener("click", startVoice);
     $("voiceStop")?.addEventListener("click", stopVoice);
-    $("voiceClear")?.addEventListener("click", () => {
-      if ($("voiceTranscript")) $("voiceTranscript").innerHTML = '<div class="voice-empty">Здесь появятся твои слова и ответы Pinsk.</div>';
-    });
     return;
   }
 
@@ -2642,66 +2629,76 @@ function setVoiceStatus(message, state = "idle") {
   if (stop) stop.disabled = !voiceActive;
 }
 
-function appendVoiceLine(role, text) {
-  const transcript = $("voiceTranscript");
-  if (!transcript) return;
-  transcript.querySelector(".voice-empty")?.remove();
-  const line = document.createElement("div");
-  line.className = "voice-line " + (role === "user" ? "voice-line-user" : "voice-line-assistant");
-  const label = document.createElement("div");
-  label.className = "voice-line-label";
-  label.textContent = role === "user" ? "Ты" : "Pinsk";
-  const content = document.createElement("div");
-  content.className = "voice-line-text";
-  content.textContent = String(text || "");
-  line.append(label, content);
-  transcript.appendChild(line);
-  transcript.scrollTop = transcript.scrollHeight;
-}
+async function speakAnswer(text) {
+  const cleanText = cleanMath(String(text || ""))
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[#*_`~$]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 12000);
 
-function getSelectedSpeechVoice(lang) {
-  if (!("speechSynthesis" in window)) return null;
-  const voices = window.speechSynthesis.getVoices() || [];
-  const matching = voices.filter(voice => voice.lang && voice.lang.toLowerCase().startsWith(lang.slice(0, 2).toLowerCase()));
-  const pool = matching.length ? matching : voices;
-  const preset = selectedVoicePreset;
-  const patterns = {
-    female: /female|woman|жен|milena|алена|яна|ирина|svetlana|katya|anna/i,
-    male: /male|man|муж|dmitri|дмит|александр|alex|pavel|paul|george/i,
-    young: /young|natural|neural|premium|online|google.*рус|microsoft.*ru/i,
-    robot: /robot|zarvox|бот/i
-  };
-  if (preset !== "robot") {
-    const found = pool.find(voice => patterns[preset]?.test(voice.name));
-    if (found) return found;
+  if (!cleanText) return;
+
+  if (voiceAudio) {
+    voiceAudio.pause();
+    voiceAudio = null;
   }
-  return pool.find(voice => voice.default) || pool[0] || null;
-}
+  if (voiceAudioUrl) {
+    URL.revokeObjectURL(voiceAudioUrl);
+    voiceAudioUrl = null;
+  }
 
-function speakAnswer(text) {
-  return new Promise(resolve => {
-    if (!("speechSynthesis" in window)) {
-      toast("Озвучивание не поддерживается браузером.");
-      resolve();
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const cleanText = cleanMath(String(text))
-      .replace(/```[\s\S]*?```/g, "Блок кода.")
-      .replace(/[#*_`~$]/g, "")
-      .replace(/\[(.*?)\]\(.*?\)/g, "$1");
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    const lang = language === "en" ? "en-US" : "ru-RU";
-    utterance.lang = lang;
-    const voice = getSelectedSpeechVoice(lang);
-    if (voice) utterance.voice = voice;
-    utterance.rate = selectedVoicePreset === "robot" ? 0.88 : selectedVoicePreset === "young" ? 1.02 : 1;
-    utterance.pitch = selectedVoicePreset === "robot" ? 0.55 : selectedVoicePreset === "female" ? 1.22 : selectedVoicePreset === "young" ? 1.08 : 0.88;
-    utterance.onstart = () => setVoiceStatus("Говорю тебе...", "speaking");
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-    window.speechSynthesis.speak(utterance);
+  setVoiceStatus("Готовлю голосовой ответ...", "thinking");
+  voiceSpeechAbort = new AbortController();
+  const response = await fetch("/api/voice/speech", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: cleanText,
+      voiceId: selectedVoicePreset,
+      language: language === "en" ? "en" : "ru"
+    }),
+    signal: voiceSpeechAbort.signal
   });
+  voiceSpeechAbort = null;
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `Не удалось создать голос (${response.status}).`);
+  }
+
+  const audioBlob = await response.blob();
+  if (!audioBlob.size) throw new Error("Сервер вернул пустой аудиофайл.");
+
+  voiceAudioUrl = URL.createObjectURL(audioBlob);
+  voiceAudio = new Audio(voiceAudioUrl);
+  voiceAudio.preload = "auto";
+
+  await new Promise((resolve, reject) => {
+    const audio = voiceAudio;
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      audio.onended = null;
+      audio.onerror = null;
+      voicePlaybackResolve = null;
+      if (error) reject(error);
+      else resolve();
+    };
+    voicePlaybackResolve = () => finish();
+    audio.onplay = () => setVoiceStatus("Говорю тебе...", "speaking");
+    audio.onended = () => finish();
+    audio.onerror = () => finish(new Error("Не удалось воспроизвести голосовой ответ."));
+    audio.play().catch(finish);
+  });
+
+  if (voiceAudioUrl) URL.revokeObjectURL(voiceAudioUrl);
+  voiceAudioUrl = null;
+  voiceAudio = null;
 }
 
 function startInlineVoice() {
@@ -2834,7 +2831,21 @@ function stopVoice() {
       console.warn(error);
     }
   }
-  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  if (voiceSpeechAbort) {
+    voiceSpeechAbort.abort();
+    voiceSpeechAbort = null;
+  }
+  if (voicePlaybackResolve) voicePlaybackResolve();
+  if (voiceAudio) {
+    voiceAudio.pause();
+    voiceAudio.removeAttribute("src");
+    voiceAudio.load();
+    voiceAudio = null;
+  }
+  if (voiceAudioUrl) {
+    URL.revokeObjectURL(voiceAudioUrl);
+    voiceAudioUrl = null;
+  }
   setVoiceStatus("Разговор остановлен. Нажми «Начать разговор», чтобы продолжить.", "idle");
 }
 
