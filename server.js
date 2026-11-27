@@ -12,6 +12,9 @@
 
 
 
+
+
+
 "use strict";
 
 const express = require("express");
@@ -39,7 +42,7 @@ dotenv.config();
 const app = express();
 
 const PORT = process.env.PORT || 3000;
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const CLOUDFLARE_ACCOUNT_ID =
   process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
@@ -2083,11 +2086,20 @@ async function askAI(messages) {
     throw new Error("Нет сообщений для отправки в Gemini.");
   }
 
+  // Image/PDF input requires a multimodal Gemini model. Do not send visual
+  // attachments to a text-only or lightweight model selected for chat.
+  const hasVisualInput = contents.some(message =>
+    (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
+  );
+  const requestModel = hasVisualInput
+    ? (process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash")
+    : MODEL;
+
   return executeWithKeyRotation(
     pool,
     async (apiKey, { signal }) => {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${requestModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
         {
           method: "POST",
           headers: {
