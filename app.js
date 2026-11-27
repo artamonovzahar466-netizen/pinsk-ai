@@ -1,5 +1,10 @@
 
 
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -1153,6 +1158,35 @@ function safeImageSource(source) {
   return "";
 }
 
+function getChatScrollContainer() {
+  return $("workspace") || document.scrollingElement || document.documentElement;
+}
+
+function scrollChatToBottom(behavior = "smooth") {
+  const container = getChatScrollContainer();
+  if (!container) return;
+
+  container.scrollTo({
+    top: container.scrollHeight,
+    behavior
+  });
+}
+
+function updateScrollToBottomButton() {
+  const button = $("scrollToBottomButton");
+  const container = getChatScrollContainer();
+  if (!button || !container) return;
+
+  const distanceToBottom =
+    container.scrollHeight - container.scrollTop - container.clientHeight;
+  const chatIsActive = currentPage === "chat";
+
+  button.classList.toggle(
+    "visible",
+    chatIsActive && distanceToBottom > 220
+  );
+}
+
 function renderMessage(role, content, options = {}) {
   const messages = $("messages");
   if (!messages) return;
@@ -1228,7 +1262,8 @@ function renderMessage(role, content, options = {}) {
   else item.append(avatar, body);
 
   messages.appendChild(item);
-  messages.scrollTop = messages.scrollHeight;
+  scrollChatToBottom("smooth");
+  updateScrollToBottomButton();
 }
 
 async function loadHistory() {
@@ -1313,8 +1348,8 @@ function createLoadingMessage(text = "Pinsk думает...") {
   loading.appendChild(loadingText);
   $("messages")?.appendChild(loading);
 
-  const messages = $("messages");
-  if (messages) messages.scrollTop = messages.scrollHeight;
+  scrollChatToBottom("smooth");
+  updateScrollToBottomButton();
 
   return loading;
 }
@@ -1527,6 +1562,7 @@ function renderPage(page) {
 
   renderPageContent(page);
   $("sidebar")?.classList.remove("open");
+  updateScrollToBottomButton();
 }
 
 function renderPageContent(page) {
@@ -2981,6 +3017,58 @@ function installPinskUiFixes() {
       50% { box-shadow: 0 0 0 5px #ff759d33; }
     }
 
+    /* Кнопка прокрутки к последнему сообщению — стиль Pinsk AI */
+    .pinsk-scroll-bottom {
+      position: fixed;
+      z-index: 1200;
+      right: max(28px, calc((100vw - 930px) / 2 + 28px));
+      bottom: 112px;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 1px solid #514875;
+      border-radius: 50%;
+      color: #f4f0ff;
+      background: rgba(38, 34, 55, .96);
+      box-shadow: 0 6px 22px #00000055;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity .18s ease, transform .18s ease, visibility .18s ease, background .18s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .pinsk-scroll-bottom.visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .pinsk-scroll-bottom:hover {
+      background: #39324f;
+      border-color: #8b78ff;
+    }
+
+    .pinsk-scroll-bottom svg {
+      width: 21px;
+      height: 21px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .pinsk-scroll-bottom:focus-visible {
+      outline: 3px solid #a99aff;
+      outline-offset: 3px;
+    }
+
     .analysis-result {
       margin-top: 18px;
       line-height: 1.65;
@@ -3625,6 +3713,13 @@ function installPinskUiFixes() {
         min-width: 0;
       }
 
+      .pinsk-scroll-bottom {
+        right: 18px;
+        bottom: 92px;
+        width: 42px;
+        height: 42px;
+      }
+
       .voice-inline-button {
         width: 38px;
         height: 38px;
@@ -3635,6 +3730,33 @@ function installPinskUiFixes() {
   `;
 
   document.head.appendChild(style);
+
+  // Кнопка быстрого перехода к последнему сообщению.
+  if (!$("scrollToBottomButton")) {
+    const button = document.createElement("button");
+    button.id = "scrollToBottomButton";
+    button.type = "button";
+    button.className = "pinsk-scroll-bottom";
+    button.setAttribute("aria-label", "Перейти к последнему сообщению");
+    button.title = "К последнему сообщению";
+    button.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M12 4v15M5.5 12.5 12 19l6.5-6.5" />
+      </svg>
+    `;
+    button.addEventListener("click", () => {
+      scrollChatToBottom("smooth");
+    });
+    document.body.appendChild(button);
+  }
+
+  const scrollContainer = getChatScrollContainer();
+  if (scrollContainer && !scrollContainer.dataset.pinskScrollBound) {
+    scrollContainer.dataset.pinskScrollBound = "true";
+    scrollContainer.addEventListener("scroll", updateScrollToBottomButton, { passive: true });
+  }
+
+  updateScrollToBottomButton();
 }
 
 /* =========================================
@@ -3686,3 +3808,4 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
