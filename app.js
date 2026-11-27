@@ -1,11 +1,5 @@
 
 
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -48,17 +42,10 @@ let voiceActive = false;
 let voiceChatId = null;
 let voiceBusy = false;
 let voiceRecognitionStarting = false;
-const ELEVENLABS_VOICES = {
-  adam: "pNInz6obpgDQGcFmaJgB",
-  antoni: "ErXwobaYiN019PkySvjV",
-  rachel: "21m00Tcm4TlvDq8ikWAM"
-};
-let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "adam";
-if (!Object.prototype.hasOwnProperty.call(ELEVENLABS_VOICES, selectedVoicePreset)) selectedVoicePreset = "adam";
-let voiceAudio = null;
-let voiceAudioUrl = null;
+// Browser-native speech synthesis: no external service, API key, or server billing.
+let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "young";
+if (!["young", "male", "female", "default"].includes(selectedVoicePreset)) selectedVoicePreset = "young";
 let voicePlaybackResolve = null;
-let voiceSpeechAbort = null;
 let selectedAnalysisFile = null;
 
 let selectedFiles = [];
@@ -342,6 +329,7 @@ async function api(url, options = {}) {
     });
 
   } catch (error) {
+    if (error?.name === "AbortError" || options.signal?.aborted) throw error;
     const connectionError = new Error("Не удалось подключиться к серверу.");
     connectionError.status = 0;
     throw connectionError;
@@ -1414,8 +1402,6 @@ async function sendMessage(value, options = {}) {
     imageMode ? "Pinsk создаёт изображение..." : "Pinsk думает..."
   );
 
-  let voiceTurnSucceeded = false;
-
   try {
     if (imageMode) {
       const data = await api("/api/images/generate", {
@@ -1450,10 +1436,30 @@ async function sendMessage(value, options = {}) {
         formData.append("files", file, file.name);
       });
 
-      const data = await api("/api/chat", {
-        method: "POST",
-        body: formData
-      });
+      let data;
+      if (options.voiceSession) {
+        const voiceRequestController = new AbortController();
+        const voiceRequestTimer = window.setTimeout(() => voiceRequestController.abort(), 90000);
+        try {
+          data = await api("/api/chat", {
+            method: "POST",
+            body: formData,
+            signal: voiceRequestController.signal
+          });
+        } catch (requestError) {
+          if (requestError.name === "AbortError") {
+            throw new Error("Pinsk не получил ответ от ИИ за 90 секунд. Попробуй сказать ещё раз.");
+          }
+          throw requestError;
+        } finally {
+          window.clearTimeout(voiceRequestTimer);
+        }
+      } else {
+        data = await api("/api/chat", {
+          method: "POST",
+          body: formData
+        });
+      }
 
       if (options.voiceSession) voiceChatId = data.conversationId || voiceChatId;
       else currentChatId = data.conversationId || currentChatId;
@@ -1464,7 +1470,6 @@ async function sendMessage(value, options = {}) {
 
       if (options.voiceSession) {
         if (options.speak) await speakAnswer(answer);
-        voiceTurnSucceeded = true;
       } else {
         renderMessage("assistant", answer);
         if (options.speak) speakAnswer(answer);
@@ -1479,21 +1484,7 @@ async function sendMessage(value, options = {}) {
   } catch (error) {
     loading?.remove();
     if (options.voiceSession) {
-      // Не перезапускаем микрофон поверх ошибки TTS: иначе статус ошибки
-      // мгновенно заменяется на «Слушаю тебя…» и пользователь не видит причину.
-      voiceActive = false;
-      if (recognition) {
-        const failedRecognition = recognition;
-        recognition = null;
-        try {
-          failedRecognition.onresult = null;
-          failedRecognition.onerror = null;
-          failedRecognition.onstart = null;
-          failedRecognition.onend = null;
-          failedRecognition.stop();
-        } catch (_) {}
-      }
-      setVoiceStatus("Не удалось озвучить ответ: " + error.message, "error");
+      setVoiceStatus("Ошибка голосового ответа: " + error.message, "error");
     } else {
       renderMessage(
         "assistant",
@@ -1506,8 +1497,7 @@ async function sendMessage(value, options = {}) {
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
-      // Следующий вопрос слушаем только после успешно воспроизведённого ответа.
-      if (voiceActive && voiceTurnSucceeded) startVoiceRecognition();
+      if (voiceActive) startVoiceRecognition();
     }
   }
 }
@@ -1732,10 +1722,12 @@ function renderPageContent(page) {
           <div class="voice-status" id="voiceStatus">Нажми «Начать разговор» и разреши доступ к микрофону.</div>
           <label class="voice-select-label" for="voicePreset">Голос Pinsk</label>
           <select id="voicePreset" class="voice-select">
-            <option value="adam">Adam — молодой мужской</option>
-            <option value="antoni">Antoni — мягкий мужской</option>
-            <option value="rachel">Rachel — женский</option>
+            <option value="young">Молодой / естественный</option>
+            <option value="male">Мужской</option>
+            <option value="female">Женский</option>
+            <option value="default">Голос браузера по умолчанию</option>
           </select>
+          <div class="voice-hint">Используется голос, установленный в браузере или системе. Внешний API-ключ не нужен.</div>
           <div class="voice-controls">
             <button class="primary-button voice-start-button" id="voiceStart">🎙 Начать разговор</button>
             <button class="secondary-button" id="voiceStop" disabled>Остановить</button>
@@ -1751,7 +1743,7 @@ function renderPageContent(page) {
       preset.addEventListener("change", () => {
         selectedVoicePreset = preset.value;
         localStorage.setItem("pinsk_voice_preset", selectedVoicePreset);
-        if (voiceAudio) voiceAudio.pause();
+        if ("speechSynthesis" in window) window.speechSynthesis.cancel();
       });
     }
     $("voiceStart")?.addEventListener("click", startVoice);
@@ -2661,113 +2653,117 @@ function setVoiceStatus(message, state = "idle") {
   if (stop) stop.disabled = !voiceActive;
 }
 
-async function speakAnswer(text) {
-  const cleanText = cleanMath(String(text || ""))
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/[#*_`~$]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 12000);
-
-  if (!cleanText) throw new Error("В ответе нет текста для озвучивания.");
-
-  if (voiceAudio) {
-    voiceAudio.pause();
-    voiceAudio.removeAttribute("src");
-    voiceAudio.load();
-    voiceAudio = null;
+function getSelectedSpeechVoice(lang) {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  const languagePrefix = String(lang || "ru-RU").slice(0, 2).toLowerCase();
+  const matching = voices.filter(voice => voice.lang && voice.lang.toLowerCase().startsWith(languagePrefix));
+  const pool = matching.length ? matching : voices;
+  const patterns = {
+    female: /female|woman|жен|milena|алена|яна|ирина|svetlana|katya|anna/i,
+    male: /male|man|муж|dmitri|дмит|александр|alex|pavel|paul|george/i,
+    young: /young|natural|neural|premium|online|google.*рус|microsoft.*ru/i
+  };
+  if (selectedVoicePreset !== "default") {
+    const found = pool.find(voice => patterns[selectedVoicePreset]?.test(voice.name));
+    if (found) return found;
   }
-  if (voiceAudioUrl) {
-    URL.revokeObjectURL(voiceAudioUrl);
-    voiceAudioUrl = null;
-  }
+  return pool.find(voice => voice.default) || pool[0] || null;
+}
 
-  setVoiceStatus("Создаю голосовой ответ…", "thinking");
-  const controller = new AbortController();
-  voiceSpeechAbort = controller;
-
-  try {
-    const response = await fetch("/api/voice/speech", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json", "Accept": "audio/mpeg" },
-      body: JSON.stringify({
-        text: cleanText,
-        voiceId: ELEVENLABS_VOICES[selectedVoicePreset] || ELEVENLABS_VOICES.adam,
-        language: language === "en" ? "en" : "ru"
-      }),
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      const rawError = await response.text().catch(() => "");
-      let message = rawError;
-      try {
-        const parsed = JSON.parse(rawError);
-        message = parsed.error || parsed.message || rawError;
-      } catch (_) {}
-      throw new Error(message || `Сервер озвучивания вернул ошибку ${response.status}.`);
+function speakAnswer(text) {
+  return new Promise(async (resolve, reject) => {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      reject(new Error("В этом браузере нет встроенной озвучки. Открой Pinsk в Chrome или Edge."));
+      return;
     }
 
-    const contentType = (response.headers.get("content-type") || "").toLowerCase();
-    const audioBlob = await response.blob();
-    if (!audioBlob.size) throw new Error("ElevenLabs вернул пустой аудиофайл.");
-    if (contentType && !contentType.includes("audio") && !contentType.includes("octet-stream")) {
-      const bodyText = await audioBlob.text().catch(() => "");
-      throw new Error("Вместо аудио сервер вернул " + contentType + (bodyText ? ": " + bodyText.slice(0, 240) : "."));
+    const cleanText = cleanMath(String(text || ""))
+      .replace(/```[\s\S]*?```/g, " Блок кода. ")
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/[#*_`~$]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 7000);
+
+    if (!cleanText) { resolve(); return; }
+
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    // Split long answers into short utterances; this avoids common Chromium TTS stalls.
+    const chunks = [];
+    let rest = cleanText;
+    while (rest.length > 2200) {
+      let cut = rest.lastIndexOf(". ", 2200);
+      if (cut < 900) cut = rest.lastIndexOf(" ", 2200);
+      if (cut < 1) cut = 2200;
+      chunks.push(rest.slice(0, cut + (rest[cut] === "." ? 1 : 0)).trim());
+      rest = rest.slice(cut + (rest[cut] === "." ? 1 : 0)).trim();
     }
+    if (rest) chunks.push(rest);
 
-    voiceAudioUrl = URL.createObjectURL(audioBlob);
-    const audio = new Audio();
-    voiceAudio = audio;
-    audio.preload = "auto";
-    audio.src = voiceAudioUrl;
+    let finished = false;
+    const finishAll = error => {
+      if (finished) return;
+      finished = true;
+      voicePlaybackResolve = null;
+      if (error) reject(error); else resolve();
+    };
+    voicePlaybackResolve = () => {
+      synth.cancel();
+      finishAll();
+    };
 
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = error => {
-        if (settled) return;
-        settled = true;
-        audio.onended = null;
-        audio.onerror = null;
-        audio.oncanplay = null;
-        voicePlaybackResolve = null;
-        if (error) reject(error);
-        else resolve();
-      };
-      voicePlaybackResolve = () => finish();
-      audio.onplay = () => setVoiceStatus("Отвечаю голосом…", "speaking");
-      audio.onended = () => finish();
-      audio.onerror = () => {
-        const mediaError = audio.error;
-        const details = mediaError ? ` (код ${mediaError.code}${mediaError.message ? ": " + mediaError.message : ""})` : "";
-        finish(new Error("Браузер не смог декодировать или воспроизвести MP3" + details + "."));
-      };
-      audio.oncanplay = () => {
-        audio.play().catch(error => {
-          const reason = error?.name === "NotAllowedError"
-            ? "Браузер заблокировал воспроизведение. Нажми «Начать разговор» ещё раз и разреши звук."
-            : error?.message || "неизвестная ошибка воспроизведения";
-          finish(new Error("Не удалось запустить аудио: " + reason));
+    try {
+      // Voices may load asynchronously in Chrome; allow the browser a short moment.
+      let voices = synth.getVoices();
+      if (!voices.length) {
+        await new Promise(done => {
+          let settled = false;
+          const finish = () => { if (settled) return; settled = true; done(); };
+          synth.addEventListener?.("voiceschanged", finish, { once: true });
+          window.setTimeout(finish, 1200);
         });
-      };
-      audio.load();
-    });
-  } finally {
-    if (voiceSpeechAbort === controller) voiceSpeechAbort = null;
-    if (voiceAudio) {
-      voiceAudio.pause();
-      voiceAudio.removeAttribute("src");
-      voiceAudio.load();
-      voiceAudio = null;
+      }
+      const lang = language === "en" ? "en-US" : "ru-RU";
+      const voice = getSelectedSpeechVoice(lang);
+
+      for (const chunk of chunks) {
+        if (finished) return;
+        await new Promise((done, fail) => {
+          const utterance = new SpeechSynthesisUtterance(chunk);
+          let settled = false;
+          const timer = window.setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            synth.cancel();
+            fail(new Error("Браузер не завершил озвучивание. Попробуй ещё раз или выбери другой голос в настройках системы."));
+          }, Math.max(30000, chunk.length * 90));
+          const settle = error => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            if (error) fail(error); else done();
+          };
+          utterance.lang = lang;
+          if (voice) utterance.voice = voice;
+          utterance.rate = selectedVoicePreset === "young" ? 1.02 : 1;
+          utterance.pitch = selectedVoicePreset === "female" ? 1.12 : selectedVoicePreset === "young" ? 1.04 : 0.94;
+          utterance.onstart = () => setVoiceStatus("Говорю тебе...", "speaking");
+          utterance.onend = () => settle();
+          utterance.onerror = event => {
+            if (event.error === "canceled" || event.error === "interrupted") settle();
+            else settle(new Error("Браузер не смог озвучить ответ: " + (event.error || "неизвестная ошибка")));
+          };
+          synth.speak(utterance);
+        });
+      }
+      finishAll();
+    } catch (error) {
+      finishAll(error);
     }
-    if (voiceAudioUrl) {
-      URL.revokeObjectURL(voiceAudioUrl);
-      voiceAudioUrl = null;
-    }
-  }
+  });
 }
 
 function startInlineVoice() {
@@ -2900,21 +2896,8 @@ function stopVoice() {
       console.warn(error);
     }
   }
-  if (voiceSpeechAbort) {
-    voiceSpeechAbort.abort();
-    voiceSpeechAbort = null;
-  }
   if (voicePlaybackResolve) voicePlaybackResolve();
-  if (voiceAudio) {
-    voiceAudio.pause();
-    voiceAudio.removeAttribute("src");
-    voiceAudio.load();
-    voiceAudio = null;
-  }
-  if (voiceAudioUrl) {
-    URL.revokeObjectURL(voiceAudioUrl);
-    voiceAudioUrl = null;
-  }
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   setVoiceStatus("Разговор остановлен. Нажми «Начать разговор», чтобы продолжить.", "idle");
 }
 
