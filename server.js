@@ -1,20 +1,6 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -42,7 +28,10 @@ dotenv.config();
 const app = express();
 
 const PORT = process.env.PORT || 3000;
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const CONFIGURED_GEMINI_MODEL = String(process.env.GEMINI_MODEL || "").trim();
+const MODEL = !CONFIGURED_GEMINI_MODEL || CONFIGURED_GEMINI_MODEL === "gemini-2.5-flash"
+  ? "gemini-3.8-flash"
+  : CONFIGURED_GEMINI_MODEL;
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const CLOUDFLARE_ACCOUNT_ID =
   process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
@@ -2092,7 +2081,12 @@ async function askAI(messages) {
     (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
   );
   const requestModel = hasVisualInput
-    ? (process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash")
+    ? (
+        !process.env.GEMINI_VISION_MODEL ||
+        String(process.env.GEMINI_VISION_MODEL).trim() === "gemini-2.5-flash"
+          ? "gemini-3.8-flash"
+          : String(process.env.GEMINI_VISION_MODEL).trim()
+      )
     : MODEL;
 
   return executeWithKeyRotation(
@@ -3201,5 +3195,6 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
 
