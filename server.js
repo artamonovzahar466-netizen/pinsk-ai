@@ -12,7 +12,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
-const { google } = require("googleapis");
+// Gmail API uses Node.js built-in fetch; no extra package required.
 
 const {
   initGeminiKeysTable,
@@ -73,20 +73,26 @@ async function sendVerificationEmail(email, code) {
     throw new Error("Некорректный адрес получателя.");
   }
 
-  const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    "https://developers.google.com/oauthplayground"
-  );
-
-  oauth2Client.setCredentials({
-    refresh_token: refreshToken
+  // Получаем новый access token по сохранённому refresh token.
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token"
+    })
   });
 
-  const gmail = google.gmail({
-    version: "v1",
-    auth: oauth2Client
-  });
+  const tokenData = await tokenResponse.json().catch(() => ({}));
+
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    console.error("Gmail OAuth token error:", tokenData);
+    throw new Error(
+      `Не удалось получить Gmail access token: ${tokenData.error_description || tokenData.error || tokenResponse.status}`
+    );
+  }
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
@@ -113,7 +119,6 @@ async function sendVerificationEmail(email, code) {
     const lines = Buffer.from(value, "utf8")
       .toString("base64")
       .match(/.{1,76}/g);
-
     return (lines || []).join("\r\n");
   };
 
@@ -144,16 +149,29 @@ async function sendVerificationEmail(email, code) {
 
   const raw = Buffer.from(message, "utf8").toString("base64url");
 
-  const result = await gmail.users.messages.send({
-    userId: "me",
-    requestBody: {
-      raw
+  const sendResponse = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ raw })
     }
-  });
+  );
 
-  console.log("Pinsk: письмо отправлено через Gmail API.");
+  const sendData = await sendResponse.json().catch(() => ({}));
 
-  return result.data;
+  if (!sendResponse.ok || !sendData.id) {
+    console.error("Gmail API send error:", sendData);
+    throw new Error(
+      `Gmail API не отправил письмо: ${sendData.error?.message || sendResponse.status}`
+    );
+  }
+
+  console.log("Pinsk: письмо отправлено через Gmail API:", sendData.id);
+  return sendData;
 }
 
 
@@ -2982,4 +3000,3 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
