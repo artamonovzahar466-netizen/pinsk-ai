@@ -1,5 +1,13 @@
 
 
+
+
+
+
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -28,7 +36,9 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = "AI Horde";
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+const CLOUDFLARE_ACCOUNT_ID =
+  process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 const LIMITED_OWNER_EMAIL = "artomov.sergeij@gmail.com".toLowerCase();
 
@@ -2482,7 +2492,7 @@ async function translateImagePrompt(prompt) {
     throw new Error("Пустое описание изображения.");
   }
 
-  // Английский текст уже подходит AI Horde — не тратим время на лишний вызов Gemini.
+  // Английский текст уже подходит Cloudflare Workers AI — не тратим время на лишний вызов Gemini.
   if (!/[\u0400-\u04FF]/.test(source)) {
     return source.slice(0, 2048);
   }
@@ -2566,153 +2576,184 @@ async function translateImagePrompt(prompt) {
 
 
 // ==========================================
-// AI HORDE IMAGE GENERATION
+// IMAGE PROMPT TRANSLATION
 // ==========================================
 
-async function generateHordeImage(prompt) {
-  const apiKey = process.env.AI_HORDE_API_KEY || "0000000000";
+async function translateImagePrompt(prompt) {
+  const source = String(prompt || "").trim();
 
-  const headers = {
-    "Content-Type": "application/json",
-    apikey: apiKey,
-    "Client-Agent": "PinskAI:1.0:artamonovzahar466@gmail.com"
-  };
-
-  const submitResponse = await fetch(
-    "https://aihorde.net/api/v2/generate/async",
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        prompt: String(prompt).slice(0, 2048),
-        params: {
-          // 448x448 stays below AI Horde's 511x511 kudos threshold.
-          // Fewer steps also reduce sampler work during high demand.
-          width: 448,
-          height: 448,
-          steps: 12,
-          n: 1,
-          cfg_scale: 7,
-          sampler_name: "k_euler",
-          karras: true
-        },
-        nsfw: false,
-        censor_nsfw: true,
-        trusted_workers: false,
-        slow_workers: false,
-        r2: true,
-        shared: false
-      }),
-      signal: AbortSignal.timeout(30000)
-    }
-  );
-
-  const submitData = await submitResponse.json().catch(() => ({}));
-
-  if (!submitResponse.ok || !submitData.id) {
-    throw new Error(
-      submitData.message ||
-      `AI Horde: ошибка запуска генерации (${submitResponse.status})`
-    );
+  if (!source) {
+    throw new Error("Пустое описание изображения.");
   }
 
-  const requestId = submitData.id;
-  let finished = false;
+  // Английский текст уже подходит Cloudflare Workers AI — не тратим время на лишний вызов Gemini.
+  if (!/[\u0400-\u04FF]/.test(source)) {
+    return source.slice(0, 2048);
+  }
 
-  for (let attempt = 0; attempt < 80; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 3000));
+  // Для русского текста используем короткий специализированный запрос,
+  // а не общий askAI с лимитом ответа в 4096 токенов.
+  let answer;
+  try {
+    answer = await executeWithKeyRotation(
+      pool,
+      async (apiKey, { signal }) => {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: {
+                parts: [{
+                  text:
+                    "Translate the user's Russian image prompt into concise, accurate English for an image model. " +
+                    "Preserve all requested objects, composition, style, colors and details. " +
+                    "Do not add anything. Return only the English prompt."
+                }]
+              },
+              contents: [{
+                role: "user",
+                parts: [{ text: source }]
+              }],
+              generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 512
+              }
+            }),
+            signal
+          }
+        );
 
-    const checkResponse = await fetch(
-      `https://aihorde.net/api/v2/generate/check/${requestId}`,
-      {
-        headers,
-        signal: AbortSignal.timeout(20000)
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(
+            data?.error?.message || `Gemini API вернул HTTP ${response.status}`
+          );
+          error.status = response.status;
+          throw error;
+        }
+
+        const translated = (data.candidates?.[0]?.content?.parts || [])
+          .filter(part => typeof part.text === "string")
+          .map(part => part.text)
+          .join("\n")
+          .trim();
+
+        if (!translated) {
+          throw new Error("Gemini не смог перевести описание изображения.");
+        }
+
+        return translated;
       }
     );
-
-    const checkData = await checkResponse.json().catch(() => ({}));
-
-    if (!checkResponse.ok) {
-      throw new Error("AI Horde: не удалось проверить статус генерации.");
-    }
-
-    if (checkData.faulted) {
-      throw new Error("AI Horde: генерация завершилась с ошибкой.");
-    }
-
-    if (checkData.done) {
-      finished = true;
-      break;
-    }
+  } catch (error) {
+    // Не блокируем создание изображения из-за временной перегрузки Gemini.
+    console.warn(
+      "Pinsk: перевод промпта через Gemini недоступен, отправляем исходное описание:",
+      error.message
+    );
+    return source.slice(0, 2048);
   }
 
-  if (!finished) {
-    throw new Error("AI Horde: генерация не завершилась за 4 минуты. Очередь может быть перегружена — попробуй ещё раз позже.");
+  const translated = String(answer || "")
+    .replace(/```[\s\S]*?```/g, text => text.replace(/```/g, ""))
+    .trim()
+    .replace(/^["']|["']$/g, "");
+
+  if (!translated) {
+    throw new Error("Не удалось перевести описание изображения.");
   }
 
-  const statusResponse = await fetch(
-    `https://aihorde.net/api/v2/generate/status/${requestId}`,
+  return translated.slice(0, 2048);
+}
+
+
+// ==========================================
+// CLOUDFLARE WORKERS AI — IMAGE GENERATION
+// ==========================================
+
+async function generateCloudflareImage(prompt) {
+  const apiToken = String(
+    process.env.CLOUDFLARE_API_TOKEN || ""
+  ).trim();
+
+  const accountId = String(CLOUDFLARE_ACCOUNT_ID || "").trim();
+
+  if (!apiToken) {
+    const error = new Error(
+      "CLOUDFLARE_API_TOKEN не настроен в Render."
+    );
+    error.status = 503;
+    throw error;
+  }
+
+  if (!accountId) {
+    const error = new Error(
+      "CLOUDFLARE_ACCOUNT_ID не настроен в Render."
+    );
+    error.status = 503;
+    throw error;
+  }
+
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${IMAGE_MODEL}`,
     {
-      headers,
-      signal: AbortSignal.timeout(30000)
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: String(prompt).slice(0, 2048),
+        steps: 4
+      }),
+      signal: AbortSignal.timeout(180000)
     }
   );
 
-  const statusData = await statusResponse.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({}));
 
-  if (!statusResponse.ok) {
-    throw new Error("AI Horde: не удалось получить готовое изображение.");
+  if (!response.ok || data.success === false) {
+    const providerError =
+      data?.errors?.map(item => item.message).join("; ") ||
+      data?.error?.message ||
+      `Cloudflare Workers AI HTTP ${response.status}`;
+
+    const error = new Error(providerError);
+    error.status = response.status || 500;
+
+    console.error("Cloudflare Workers AI:", providerError);
+
+    throw error;
   }
 
-  const imageUrl = statusData?.generations?.[0]?.img;
+  const imageData = data?.result?.image;
 
-  if (typeof imageUrl !== "string" || !imageUrl) {
-    throw new Error("AI Horde не вернул изображение.");
-  }
-
-  if (imageUrl.startsWith("data:image/")) {
-    const match = imageUrl.match(
-      /^data:(image\/[^;]+);base64,(.+)$/
+  if (typeof imageData !== "string" || !imageData) {
+    throw new Error(
+      "Cloudflare Workers AI не вернул готовое изображение."
     );
-
-    if (!match) {
-      throw new Error("AI Horde вернул некорректное изображение.");
-    }
-
-    return {
-      mimeType: match[1],
-      data: match[2],
-      text: ""
-    };
   }
 
-  const imageResponse = await fetch(imageUrl, {
-    signal: AbortSignal.timeout(60000)
-  });
+  const imageBuffer = Buffer.from(imageData, "base64");
 
-  if (!imageResponse.ok) {
-    throw new Error("Не удалось загрузить готовое изображение AI Horde.");
-  }
-
-  const contentType = imageResponse.headers.get("content-type") ||
-    "image/png";
-
-  if (!contentType.startsWith("image/")) {
-    throw new Error("AI Horde вернул файл неподдерживаемого формата.");
-  }
-
-  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-
-  if (!imageBuffer.length || imageBuffer.length > 15 * 1024 * 1024) {
-    throw new Error("Размер изображения некорректен.");
+  if (
+    !imageBuffer.length ||
+    imageBuffer.length > 20 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Cloudflare вернул изображение некорректного размера."
+    );
   }
 
   return {
-    mimeType: contentType.split(";")[0],
-    data: imageBuffer.toString("base64"),
+    mimeType: "image/png",
+    data: imageData,
     text: ""
   };
 }
+
 
 async function imageGenerationHandler(req, res) {
   let reserved = false;
@@ -2757,8 +2798,7 @@ async function imageGenerationHandler(req, res) {
     }
 
     const imagePrompt = await translateImagePrompt(prompt);
-
-    const result = await generateHordeImage(imagePrompt);
+    const result = await generateCloudflareImage(imagePrompt);
 
     res.json({
       success: true,
@@ -2770,21 +2810,30 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error("AI Horde image generation error:", error.message);
+    console.error(
+      "Cloudflare Workers AI image generation error:",
+      error.message
+    );
 
     if (reserved) {
       await releaseCounter(req.user.id, "images", 1)
         .catch(() => {});
     }
 
-    const status = error.name === "TimeoutError" || error.status === 429
-      ? 503
-      : 500;
+    const status =
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      error.status === 429 ||
+      error.status === 401 ||
+      error.status === 403 ||
+      (error.status >= 500 && error.status <= 599)
+        ? 503
+        : 500;
 
     res.status(status).json({
       error: status === 503
-        ? "AI Horde занят или не успел создать изображение. Попробуй позже."
-        : "Не удалось создать изображение. Попробуй изменить описание."
+        ? "Cloudflare Workers AI временно недоступен, превышен лимит или не хватает разрешений. Попробуй позже."
+        : "Не удалось создать изображение. Проверь описание и настройки Cloudflare."
     });
   }
 }
@@ -3077,4 +3126,5 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
