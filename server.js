@@ -2068,7 +2068,7 @@ function convertToGeminiContents(messages) {
     .filter(message => message.parts.length > 0);
 }
 
-async function askAI(messages) {
+async function askAI(messages, generationConfig = {}) {
   const systemText = messages
     .filter(message => message.role === "system")
     .map(message => typeof message.content === "string"
@@ -2104,7 +2104,8 @@ async function askAI(messages) {
               : {}),
             contents,
             generationConfig: {
-              maxOutputTokens: 4096
+              maxOutputTokens: 4096,
+              ...generationConfig
             }
           }),
           signal
@@ -2774,25 +2775,45 @@ app.post("/api/design/generate", auth, async (req, res) => {
         role: "user",
         content: "Создай сайт по этому заданию.\n\n" + prompt
       }
-    ]);
+    ], {
+      responseMimeType: "application/json",
+      maxOutputTokens: 8192
+    });
 
     let generated;
     try {
-      const cleaned = String(answer)
+      let cleaned = String(answer || "").trim();
+      cleaned = cleaned
         .replace(/^```(?:json)?\s*/i, "")
         .replace(/\s*```$/i, "")
         .trim();
+
+      // Иногда модель оборачивает JSON в поясняющий текст — извлекаем объект.
       const start = cleaned.indexOf("{");
       const end = cleaned.lastIndexOf("}");
-      if (start < 0 || end <= start) throw new Error("JSON not found");
+      if (start < 0 || end <= start) {
+        throw new Error("JSON object not found");
+      }
+
       generated = JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
+
+      // Поддерживаем альтернативную вложенную структуру ответа.
+      if (generated && generated.project && typeof generated.project === "object") {
+        generated = generated.project;
+      }
+
+      if (!generated || typeof generated !== "object" || Array.isArray(generated)) {
+        throw new Error("Invalid project object");
+      }
+    } catch (parseError) {
+      console.error("Design Studio JSON parse error:", parseError.message);
+      console.error("Design Studio response preview:", String(answer || "").slice(0, 1200));
+      throw new Error("Gemini вернул неполный или некорректный проект. Попробуй сократить описание сайта.");
     }
 
-    const html = String(generated.html || "").slice(0, 120000);
-    const css = String(generated.css || "").slice(0, 120000);
-    const js = String(generated.js || "").slice(0, 120000);
+    const html = String(generated.html || generated.HTML || "").slice(0, 120000);
+    const css = String(generated.css || generated.CSS || "").slice(0, 120000);
+    const js = String(generated.js || generated.javascript || generated.JS || "").slice(0, 120000);
 
     if (!html.trim()) {
       throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
