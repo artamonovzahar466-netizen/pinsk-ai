@@ -12,7 +12,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const XLSX = require("xlsx");
-const nodemailer = require("nodemailer");
+const { google } = require("googleapis");
 
 const {
   initGeminiKeysTable,
@@ -54,26 +54,39 @@ pool.on("error", error => {
 
 
 // ==========================================
-// GMAIL SMTP EMAIL
+// GMAIL API EMAIL
 // ==========================================
 
 async function sendVerificationEmail(email, code) {
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = String(process.env.SMTP_USER || "").trim();
-  const pass = String(process.env.SMTP_PASS || "").replace(/\s+/g, "");
+  const clientId = String(process.env.GOOGLE_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.GOOGLE_CLIENT_SECRET || "").trim();
+  const refreshToken = String(process.env.GOOGLE_REFRESH_TOKEN || "").trim();
+  const gmailUser = String(process.env.GMAIL_USER || "").trim();
 
-  if (!user || !pass) {
+  if (!clientId || !clientSecret || !refreshToken || !gmailUser) {
     throw new Error(
-      "SMTP_USER или SMTP_PASS не настроен в Render. Проверь настройки Gmail SMTP."
+      "Не настроены GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN или GMAIL_USER в Render."
     );
   }
 
-  if (![465, 587].includes(port)) {
-    throw new Error("SMTP_PORT должен быть 465 или 587.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("Некорректный адрес получателя.");
   }
 
-  const from = process.env.SMTP_FROM || `Pinsk AI <${user}>`;
+  const oauth2Client = new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    "https://developers.google.com/oauthplayground"
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token: refreshToken
+  });
+
+  const gmail = google.gmail({
+    version: "v1",
+    auth: oauth2Client
+  });
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#222">
@@ -83,32 +96,64 @@ async function sendVerificationEmail(email, code) {
         ${code}
       </div>
       <p>Код действует <b>10 минут</b>.</p>
-      <p style="color:#777;font-size:13px">Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.</p>
+      <p style="color:#777;font-size:13px">
+        Если ты не регистрировался в Pinsk AI, проигнорируй это письмо.
+      </p>
     </div>
   `;
 
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000
+  const plainText =
+    `Твой код подтверждения Pinsk AI: ${code}\n\n` +
+    "Код действует 10 минут.\n" +
+    "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.";
+
+  const boundary = "pinsk_" + crypto.randomBytes(12).toString("hex");
+
+  const encodeBase64 = value => {
+    const lines = Buffer.from(value, "utf8")
+      .toString("base64")
+      .match(/.{1,76}/g);
+
+    return (lines || []).join("\r\n");
+  };
+
+  const subject = Buffer.from(
+    "Код подтверждения Pinsk AI",
+    "utf8"
+  ).toString("base64");
+
+  const message = [
+    `From: Pinsk AI <${gmailUser}>`,
+    `To: ${email}`,
+    `Subject: =?UTF-8?B?${subject}?=`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    encodeBase64(plainText),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    encodeBase64(html),
+    `--${boundary}--`
+  ].join("\r\n");
+
+  const raw = Buffer.from(message, "utf8").toString("base64url");
+
+  const result = await gmail.users.messages.send({
+    userId: "me",
+    requestBody: {
+      raw
+    }
   });
 
-  const result = await transporter.sendMail({
-    from,
-    to: email,
-    subject: "Код подтверждения Pinsk AI",
-    text:
-      `Твой код подтверждения Pinsk AI: ${code}\n\n` +
-      "Код действует 10 минут.\n" +
-      "Если ты не регистрировался в Pinsk AI, просто проигнорируй это письмо.",
-    html
-  });
+  console.log("Pinsk: письмо отправлено через Gmail API.");
 
-  return result;
+  return result.data;
 }
 
 
