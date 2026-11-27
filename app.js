@@ -14,6 +14,9 @@
 
 
 
+
+
+
 "use strict";
 
 /* =========================================
@@ -60,6 +63,22 @@ let voiceRecognitionStarting = false;
 let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "young";
 if (!["young", "male", "female", "default"].includes(selectedVoicePreset)) selectedVoicePreset = "young";
 let voicePlaybackResolve = null;
+let voiceBargeInRecognition = null;
+let voicePendingUtterance = "";
+let currentSpeechText = "";
+const SUPPORTED_VOICE_LANGUAGES = ["ru-RU", "kk-KZ", "en-GB", "fr-FR", "es-ES", "it-IT", "az-AZ", "zh-CN"];
+let voiceLanguage = localStorage.getItem("pinsk_voice_language") || "ru-RU";
+if (!SUPPORTED_VOICE_LANGUAGES.includes(voiceLanguage)) voiceLanguage = "ru-RU";
+const VOICE_LANGUAGES = {
+  "ru-RU": "Русский",
+  "kk-KZ": "Казахский",
+  "en-GB": "Английский (Великобритания)",
+  "fr-FR": "Французский",
+  "es-ES": "Испанский",
+  "it-IT": "Итальянский",
+  "az-AZ": "Азербайджанский",
+  "zh-CN": "Китайский (упрощённый)"
+};
 let selectedAnalysisFile = null;
 
 let selectedFiles = [];
@@ -1445,6 +1464,7 @@ async function sendMessage(value, options = {}) {
       formData.append("message", message || "Проанализируй прикреплённые файлы.");
       formData.append("conversationId", options.voiceSession ? (voiceChatId || makeId()) : (currentChatId || makeId()));
       if (options.voiceSession) formData.append("voiceMode", "true");
+      if (options.voiceSession) formData.append("voiceLanguage", voiceLanguage);
 
       files.forEach(file => {
         formData.append("files", file, file.name);
@@ -1511,7 +1531,14 @@ async function sendMessage(value, options = {}) {
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
-      if (voiceActive) startVoiceRecognition();
+      const interruptedText = voicePendingUtterance;
+      voicePendingUtterance = "";
+      if (interruptedText && voiceActive) {
+        voiceBusy = true;
+        Promise.resolve().then(() => sendMessage(interruptedText, { speak: true, voiceSession: true }));
+      } else if (voiceActive) {
+        startVoiceRecognition();
+      }
     }
   }
 }
@@ -1734,14 +1761,25 @@ function renderPageContent(page) {
         <section class="voice-card voice-card-focus">
           <div class="voice-orb" id="voiceOrb"><span>✦</span></div>
           <div class="voice-status" id="voiceStatus">Нажми «Начать разговор» и разреши доступ к микрофону.</div>
-          <label class="voice-select-label" for="voicePreset">Голос Pinsk</label>
+          <label class="voice-select-label" for="voiceLanguage">Язык разговора</label>
+          <select id="voiceLanguage" class="voice-select">
+            <option value="ru-RU">Русский</option>
+            <option value="kk-KZ">Казахский</option>
+            <option value="en-GB">Английский (Великобритания)</option>
+            <option value="fr-FR">Французский</option>
+            <option value="es-ES">Испанский</option>
+            <option value="it-IT">Итальянский</option>
+            <option value="az-AZ">Азербайджанский</option>
+            <option value="zh-CN">Китайский</option>
+          </select>
+          <label class="voice-select-label" for="voicePreset">Тип голоса</label>
           <select id="voicePreset" class="voice-select">
             <option value="young">Молодой / естественный</option>
             <option value="male">Мужской</option>
             <option value="female">Женский</option>
-            <option value="default">Голос браузера по умолчанию</option>
+            <option value="default">По умолчанию</option>
           </select>
-          <div class="voice-hint">Используется голос, установленный в браузере или системе. Внешний API-ключ не нужен.</div>
+          <div class="voice-hint">Голос выбирается из доступных в браузере или Windows. Для некоторых языков может понадобиться установить голос в системе. Внешний API-ключ не нужен.</div>
           <div class="voice-controls">
             <button class="primary-button voice-start-button" id="voiceStart">🎙 Начать разговор</button>
             <button class="secondary-button" id="voiceStop" disabled>Остановить</button>
@@ -1757,7 +1795,18 @@ function renderPageContent(page) {
       preset.addEventListener("change", () => {
         selectedVoicePreset = preset.value;
         localStorage.setItem("pinsk_voice_preset", selectedVoicePreset);
-        if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      });
+    }
+    const languageSelect = $("voiceLanguage");
+    if (languageSelect) {
+      languageSelect.value = voiceLanguage;
+      languageSelect.addEventListener("change", () => {
+        voiceLanguage = languageSelect.value;
+        localStorage.setItem("pinsk_voice_language", voiceLanguage);
+        if (voiceActive) {
+          stopVoice();
+          toast("Язык изменён. Нажми «Начать разговор», чтобы продолжить.");
+        }
       });
     }
     $("voiceStart")?.addEventListener("click", startVoice);
@@ -2337,14 +2386,14 @@ function renderAnalysis() {
   view.innerHTML = `
     <div class="page-content">
       <h2>Анализ данных</h2>
-      <p>Загрузи CSV, TXT, JSON или MD-файл и задай вопрос по его содержимому.</p>
+      <p>Загрузи документ, таблицу, PDF, текстовый файл или изображение и задай вопрос по его содержимому.</p>
 
       <div class="dashboard-card">
         <label for="analysisFile">Выбрать файл</label>
         <input
           type="file"
           id="analysisFile"
-          accept=".csv,.txt,.json,.md"
+          accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.json,.md,.html,.xml,.log,.png,.jpg,.jpeg,.webp,.gif"
         >
 
         <p id="analysisFileName">Файл не выбран.</p>
@@ -2391,15 +2440,15 @@ async function runAnalysis() {
     return;
   }
 
-  const allowed = /\.(csv|txt|json|md)$/i.test(file.name);
+  const allowed = /\.(pdf|docx|xlsx|xls|csv|txt|json|md|html|xml|log|png|jpg|jpeg|webp|gif)$/i.test(file.name);
 
   if (!allowed) {
-    toast("Пока поддерживаются CSV, TXT, JSON и MD.");
+    toast("Формат файла не поддерживается.");
     return;
   }
 
-  if (file.size > 2 * 1024 * 1024) {
-    toast("Размер файла не должен превышать 2 МБ.");
+  if (file.size > 12 * 1024 * 1024) {
+    toast("Размер файла не должен превышать 12 МБ.");
     return;
   }
 
@@ -2408,11 +2457,13 @@ async function runAnalysis() {
   result.textContent = "Pinsk анализирует файл...";
 
   try {
-    const content = await file.text();
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+    formData.append("question", question);
 
     const data = await api("/api/analysis", {
       method: "POST",
-      body: JSON.stringify({ content, question })
+      body: formData
     });
 
     result.innerHTML = renderMarkdown(data.answer || "Нет результата.");
@@ -2670,19 +2721,72 @@ function setVoiceStatus(message, state = "idle") {
 function getSelectedSpeechVoice(lang) {
   if (!("speechSynthesis" in window)) return null;
   const voices = window.speechSynthesis.getVoices() || [];
-  const languagePrefix = String(lang || "ru-RU").slice(0, 2).toLowerCase();
-  const matching = voices.filter(voice => voice.lang && voice.lang.toLowerCase().startsWith(languagePrefix));
-  const pool = matching.length ? matching : voices;
+  const prefix = String(lang || "ru-RU").toLowerCase();
+  const matching = voices.filter(voice => (voice.lang || "").toLowerCase() === prefix);
+  const regional = matching.length ? matching : voices.filter(voice =>
+    (voice.lang || "").toLowerCase().startsWith(prefix.slice(0, 2))
+  );
+  // Never silently use a Russian/English system voice for another language.
+  // If Windows/Chrome has no matching voice, leave voice unset; utterance.lang
+  // below lets the browser choose a compatible engine for the selected locale.
+  const pool = regional;
   const patterns = {
     female: /female|woman|жен|milena|алена|яна|ирина|svetlana|katya|anna/i,
     male: /male|man|муж|dmitri|дмит|александр|alex|pavel|paul|george/i,
-    young: /young|natural|neural|premium|online|google.*рус|microsoft.*ru/i
+    young: /natural|neural|premium|online|google|microsoft/i
   };
   if (selectedVoicePreset !== "default") {
     const found = pool.find(voice => patterns[selectedVoicePreset]?.test(voice.name));
     if (found) return found;
   }
   return pool.find(voice => voice.default) || pool[0] || null;
+}
+
+function normalizeVoiceText(value) {
+  return String(value || "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function stopVoiceBargeInRecognition() {
+  const instance = voiceBargeInRecognition;
+  voiceBargeInRecognition = null;
+  if (instance) {
+    instance.onresult = null;
+    instance.onerror = null;
+    instance.onend = null;
+    try { instance.abort(); } catch (_) { try { instance.stop(); } catch (_) {} }
+  }
+}
+
+function startVoiceBargeInRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!voiceActive || !SpeechRecognition || voiceBargeInRecognition) return;
+  try {
+    const instance = new SpeechRecognition();
+    voiceBargeInRecognition = instance;
+    instance.lang = voiceLanguage;
+    instance.continuous = false;
+    instance.interimResults = false;
+    instance.maxAlternatives = 1;
+    instance.onresult = event => {
+      const transcript = String(event.results?.[0]?.[0]?.transcript || "").trim();
+      if (!transcript) return;
+      const said = normalizeVoiceText(transcript);
+      const speaking = normalizeVoiceText(currentSpeechText);
+      // Ignore recognition of the assistant's own loudspeaker output where it matches the text being spoken.
+      if (said.length > 3 && speaking && (speaking.includes(said) || said.includes(speaking.slice(0, Math.min(24, speaking.length))))) return;
+      voicePendingUtterance = transcript;
+      setVoiceStatus("Ты меня перебил. Слушаю тебя...", "listening");
+      stopVoiceBargeInRecognition();
+      if (voicePlaybackResolve) voicePlaybackResolve();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    };
+    instance.onerror = () => { if (voiceBargeInRecognition === instance) voiceBargeInRecognition = null; };
+    instance.onend = () => { if (voiceBargeInRecognition === instance) voiceBargeInRecognition = null; };
+    instance.start();
+  } catch (error) {
+    voiceBargeInRecognition = null;
+    console.warn("Voice barge-in unavailable:", error);
+  }
 }
 
 function speakAnswer(text) {
@@ -2722,6 +2826,8 @@ function speakAnswer(text) {
       if (finished) return;
       finished = true;
       voicePlaybackResolve = null;
+      currentSpeechText = "";
+      stopVoiceBargeInRecognition();
       if (error) reject(error); else resolve();
     };
     voicePlaybackResolve = () => {
@@ -2740,7 +2846,7 @@ function speakAnswer(text) {
           window.setTimeout(finish, 1200);
         });
       }
-      const lang = language === "en" ? "en-US" : "ru-RU";
+      const lang = voiceLanguage;
       const voice = getSelectedSpeechVoice(lang);
 
       for (const chunk of chunks) {
@@ -2764,7 +2870,11 @@ function speakAnswer(text) {
           if (voice) utterance.voice = voice;
           utterance.rate = selectedVoicePreset === "young" ? 1.02 : 1;
           utterance.pitch = selectedVoicePreset === "female" ? 1.12 : selectedVoicePreset === "young" ? 1.04 : 0.94;
-          utterance.onstart = () => setVoiceStatus("Говорю тебе...", "speaking");
+          utterance.onstart = () => {
+            currentSpeechText = cleanText;
+            setVoiceStatus("Говорю тебе... Можешь перебить меня голосом.", "speaking");
+            startVoiceBargeInRecognition();
+          };
           utterance.onend = () => settle();
           utterance.onerror = event => {
             if (event.error === "canceled" || event.error === "interrupted") settle();
@@ -2831,7 +2941,7 @@ function startVoiceRecognition() {
     voiceRecognitionStarting = true;
     const instance = new SpeechRecognition();
     recognition = instance;
-    instance.lang = language === "en" ? "en-US" : "ru-RU";
+    instance.lang = voiceLanguage;
     instance.continuous = false;
     instance.interimResults = true;
     let finalTranscript = "";
@@ -2910,6 +3020,8 @@ function stopVoice() {
       console.warn(error);
     }
   }
+  voicePendingUtterance = "";
+  stopVoiceBargeInRecognition();
   if (voicePlaybackResolve) voicePlaybackResolve();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   setVoiceStatus("Разговор остановлен. Нажми «Начать разговор», чтобы продолжить.", "idle");
