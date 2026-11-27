@@ -1,5 +1,17 @@
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -2006,6 +2018,17 @@ function convertToGeminiContents(messages) {
           return text ? { text } : null;
         }
 
+        if (item.type === "file_data") {
+          const url = String(item.file_data?.url || "").trim();
+          const match = url.match(/^data:(application\/pdf);base64,([\s\S]+)$/i);
+          if (!match) return { text: "[PDF не удалось обработать: неверный формат данных]" };
+          const data = match[2].replace(/\s+/g, "");
+          if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 === 1) {
+            return { text: "[PDF не удалось обработать: повреждённые данные]" };
+          }
+          return { inlineData: { mimeType: "application/pdf", data } };
+        }
+
         if (item.type === "image_url") {
           const url = String(item.image_url?.url || "").trim();
           const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/i);
@@ -2151,6 +2174,20 @@ app.post(
         req.body.conversationId || crypto.randomUUID()
       );
       const isVoiceMode = String(req.body.voiceMode || "") === "true";
+      const allowedVoiceLanguages = {
+        "ru-RU": "русском",
+        "kk-KZ": "казахском",
+        "en-GB": "английском (британский вариант)",
+        "fr-FR": "французском",
+        "es-ES": "испанском",
+        "it-IT": "итальянском",
+        "az-AZ": "азербайджанском",
+        "zh-CN": "китайском (упрощённый)",
+      };
+      const requestedVoiceLanguage = String(req.body.voiceLanguage || "ru-RU");
+      const voiceLanguageInstruction = isVoiceMode
+        ? `В голосовом режиме отвечай естественно и только на ${allowedVoiceLanguages[requestedVoiceLanguage] || "русском"} языке. Не переключайся на другой язык без просьбы пользователя.`
+        : "";
 
       if (!message && files.length === 0) {
         return res.status(400).json({
@@ -2269,6 +2306,7 @@ app.post(
 
       const fileParts = [];
       const imageParts = [];
+      const documentParts = [];
       const fileDescriptions = [];
 
       for (const file of files) {
@@ -2279,6 +2317,15 @@ app.post(
           size: file.size,
           type: file.mimetype
         });
+
+        if (path.extname(file.originalname).toLowerCase() === ".pdf") {
+          documentParts.push({
+            type: "file_data",
+            file_data: {
+              url: `data:application/pdf;base64,${file.buffer.toString("base64")}`
+            }
+          });
+        }
 
         if (isImage(file)) {
           const mime = fileMime(file);
@@ -2341,7 +2388,7 @@ app.post(
         content: item.content
       }));
 
-      if (imageParts.length > 0) {
+      if (imageParts.length > 0 || documentParts.length > 0) {
         const lastUserIndex = history.map(item => item.role).lastIndexOf("user");
 
         if (lastUserIndex !== -1) {
@@ -2355,7 +2402,8 @@ app.post(
 
           lastUserMessage.content = [
             ...previousContent,
-            ...imageParts
+            ...imageParts,
+            ...documentParts
           ];
         }
       }
@@ -2365,6 +2413,7 @@ app.post(
           role: "system",
           content:
             "Ты Pinsk — интеллектуальный ИИ-ассистент. " +
+            (voiceLanguageInstruction ? voiceLanguageInstruction + "\n\n" : "") +
             "Отвечай полезно, точно, естественно и на языке пользователя. " +
             "Сначала пойми конкретный вопрос пользователя и отвечай именно на него. " +
             "Не ограничивайся общими фразами, если можно дать конкретный ответ.\n\n" +
@@ -2944,56 +2993,72 @@ app.post("/api/design/generate", auth, async (req, res) => {
 // DATA ANALYSIS
 // ==========================================
 
-app.post("/api/analysis", auth, async (req, res) => {
+app.post("/api/analysis", auth, upload.single("file"), async (req, res) => {
   try {
-    const content = String(req.body.content || "").trim();
-
     const question = String(
-      req.body.question ||
-      "Проанализируй эти данные и сделай выводы."
+      req.body.question || "Проанализируй эти данные и сделай выводы."
     ).trim();
+    let content = String(req.body.content || "").trim();
+    const file = req.file;
+    let userContent;
 
-    if (!content) {
-      return res.status(400).json({
-        error: "Нет данных для анализа."
-      });
+    if (file) {
+      if (isImage(file)) {
+        const mime = fileMime(file);
+        userContent = [
+          { type: "text", text: question + "\n\nВнимательно проанализируй прикреплённое изображение: прочитай текст, таблицы и подписи, если они видны." },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${file.buffer.toString("base64")}` } }
+        ];
+      } else if (path.extname(file.originalname).toLowerCase() === ".pdf") {
+        try { content = await extractFileText(file); } catch (pdfError) { console.warn("PDF text extraction fallback:", pdfError.message); }
+        userContent = [
+          { type: "text", text: question + "\n\nФАЙЛ: " + safeFileName(file.originalname) + (content ? "\n\nИзвлечённый текст:\n" + content : "\n\nЭто может быть скан. Изучи страницы PDF напрямую, распознай текст, таблицы и структуру документа.") },
+          { type: "file_data", file_data: { url: `data:application/pdf;base64,${file.buffer.toString("base64")}` } }
+        ];
+      } else {
+        content = await extractFileText(file);
+        if (!content.trim()) {
+          return res.status(422).json({ error: "Не удалось извлечь текст из файла. Проверь, что документ не повреждён." });
+        }
+        userContent = question + "\n\nФАЙЛ: " + safeFileName(file.originalname) + "\n\nДАННЫЕ:\n" + content;
+      }
+    } else {
+      userContent = question + "\n\nДАННЫЕ:\n" + content;
+    }
+
+    if (!file && !content) {
+      return res.status(400).json({ error: "Прикрепи файл или передай текст для анализа." });
     }
 
     if (content.length > 100000) {
-      return res.status(413).json({
-        error: "Файл слишком большой для анализа."
-      });
+      return res.status(413).json({ error: "Извлечённый текст слишком большой для анализа (лимит 100 000 символов)." });
     }
 
     const answer = await askAI([
       {
         role: "system",
         content:
-          "Ты аналитик данных Pinsk. " +
-          "Анализируй таблицы и текст. " +
-          "Находи закономерности, ошибки, тенденции, сравнения " +
-          "и делай выводы. Не выдумывай отсутствующие значения."
+          "Ты аналитик данных Pinsk. Анализируй прикреплённые документы, PDF, таблицы, текст и изображения. " +
+          "Для таблиц проверяй заголовки, типы данных, суммы и закономерности. " +
+          "Для сканов и изображений внимательно читай доступный текст и описывай ограничения распознавания. " +
+          "Находи ошибки, тенденции, сравнения и делай выводы. Не выдумывай отсутствующие значения. " +
+          "Если часть файла не удалось прочитать, прямо укажи это."
       },
-      {
-        role: "user",
-        content: question + "\n\nДАННЫЕ:\n" + content
-      }
+      { role: "user", content: userContent }
     ]);
 
-    res.json({
-      success: true,
-      answer
-    });
-
+    res.json({ success: true, answer, file: file ? safeFileName(file.originalname) : null });
   } catch (error) {
-    console.error("Data analysis error:", error.message);
-
-    const status = [429, 529].includes(error.status) ? 503 : 500;
-
+    console.error("Data analysis error:", error.stack || error.message);
+    const status = error instanceof multer.MulterError
+      ? 400
+      : ([429, 529].includes(error.status) ? 503 : 500);
     res.status(status).json({
-      error: status === 503
-        ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
-        : "Не удалось выполнить анализ данных."
+      error: error instanceof multer.MulterError
+        ? "Ошибка загрузки файла: " + error.message
+        : status === 503
+          ? "Gemini API временно перегружен или все ключи заняты. Попробуй позже."
+          : "Не удалось выполнить анализ файла: " + (error.message || "внутренняя ошибка сервера")
     });
   }
 });
