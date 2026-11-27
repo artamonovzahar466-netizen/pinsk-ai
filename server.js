@@ -1,13 +1,5 @@
 
 
-
-
-
-
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -1864,6 +1856,7 @@ app.get("/api/history", auth, async (req, res) => {
       SELECT id, title, created_at
       FROM conversations
       WHERE user_id = $1
+        AND COALESCE(title, '') NOT LIKE '[VOICE]%'
       ORDER BY created_at DESC
     `, [req.user.id]);
 
@@ -2133,6 +2126,89 @@ async function askAI(messages) {
 
 
 // ==========================================
+// VOICE MODE — NATURAL CLOUD TTS
+// ==========================================
+
+app.post("/api/voice/speech", auth, async (req, res) => {
+  try {
+    const text = String(req.body?.text || "").trim().slice(0, 12000);
+    const language = String(req.body?.language || "ru").toLowerCase().startsWith("en") ? "en" : "ru";
+    const allowedVoices = new Set(["ara", "rex", "eve", "sal", "leo"]);
+    const voiceId = allowedVoices.has(String(req.body?.voiceId || ""))
+      ? String(req.body.voiceId)
+      : "ara";
+
+    if (!text) {
+      return res.status(400).json({ error: "Нет текста для озвучивания." });
+    }
+
+    const apiToken = String(process.env.CLOUDFLARE_API_TOKEN || "").trim();
+    const accountId = String(CLOUDFLARE_ACCOUNT_ID || "").trim();
+
+    if (!apiToken || !accountId) {
+      return res.status(503).json({
+        error: "Голосовой движок Cloudflare не настроен. Проверь CLOUDFLARE_API_TOKEN и CLOUDFLARE_ACCOUNT_ID."
+      });
+    }
+
+    const ttsResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "xai/grok-tts",
+          input: {
+            text,
+            language,
+            voice_id: voiceId,
+            output_format: { codec: "mp3", sample_rate: 44100, bit_rate: 192000 }
+          }
+        }),
+        signal: AbortSignal.timeout(90000)
+      }
+    );
+
+    const ttsData = await ttsResponse.json().catch(() => ({}));
+    const audioUrl = ttsData?.result?.audio;
+
+    if (!ttsResponse.ok || !audioUrl) {
+      console.error("Cloudflare TTS error:", ttsData?.errors || ttsData);
+      return res.status(ttsResponse.status || 502).json({
+        error: ttsData?.errors?.[0]?.message || "Cloudflare не смог создать голосовой ответ."
+      });
+    }
+
+    const audioResponse = await fetch(audioUrl, {
+      signal: AbortSignal.timeout(90000)
+    });
+
+    if (!audioResponse.ok) {
+      throw new Error(`Не удалось получить аудио Cloudflare (HTTP ${audioResponse.status}).`);
+    }
+
+    const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
+    if (!audioBuffer.length) throw new Error("Cloudflare вернул пустой аудиофайл.");
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Content-Length", String(audioBuffer.length));
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.status(200).send(audioBuffer);
+
+  } catch (error) {
+    console.error("Voice speech error:", error.message);
+    return res.status(502).json({
+      error: "Не удалось создать голосовой ответ: " + error.message
+    });
+  }
+});
+
+
+// ==========================================
 // CHAT WITH FILES AND IMAGES
 // ==========================================
 
@@ -2154,6 +2230,7 @@ app.post(
       const conversationId = String(
         req.body.conversationId || crypto.randomUUID()
       );
+      const isVoiceMode = String(req.body.voiceMode || "") === "true";
 
       if (!message && files.length === 0) {
         return res.status(400).json({
@@ -2264,7 +2341,8 @@ app.post(
           VALUES ($1, $2, $3)
         `, [
           conversationId,
-          (message || "Прикреплённые файлы").slice(0, 60),
+          (isVoiceMode ? "[VOICE] " : "") +
+            (message || "Прикреплённые файлы").slice(0, isVoiceMode ? 52 : 60),
           userId
         ]);
       }
@@ -3126,5 +3204,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
 
