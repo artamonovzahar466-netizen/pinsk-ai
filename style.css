@@ -1,5 +1,6 @@
 
 
+
 :root {
   --bg: #101014;
   --sidebar: #17171d;
@@ -36,15 +37,23 @@ button {
 
 .app {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   width: 100%;
 }
 
 /* SIDEBAR */
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
   width: 260px;
   min-width: 260px;
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
   display: flex;
@@ -275,7 +284,9 @@ button {
 .main {
   flex: 1;
   min-width: 0;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -327,6 +338,7 @@ button {
   width: 100%;
   max-width: 930px;
   flex: 1;
+  min-height: 0;
   margin: 0 auto;
   padding: 35px 28px 20px;
   display: flex;
@@ -1022,6 +1034,12 @@ button {
 /* MOBILE */
 
 @media (max-width: 760px) {
+  .app {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+  }
+
   .sidebar {
     position: fixed;
     z-index: 8;
@@ -1120,3 +1138,4 @@ button {
 .studio-preview-column iframe { display:block; width:100%; height:calc(100% - 48px); min-height:470px; border:0; background:#fff; }
 @media (max-width:900px) { .studio-workspace { grid-template-columns:1fr; } .studio-preview-column iframe { height:520px; } }
 @media (max-width:600px) { .studio-panel { padding:14px; } .studio-heading { align-items:flex-start; } .studio-mark { width:40px; height:40px; flex:0 0 40px; } .studio-mode-tabs { flex-direction:column; } .studio-mode-tab { width:100%; text-align:left; } .studio-form-footer { align-items:stretch; flex-direction:column; } .studio-form-footer button { width:100%; } .studio-editor-top { align-items:flex-start; flex-direction:column; } .studio-code-editor { height:300px; } }
+
