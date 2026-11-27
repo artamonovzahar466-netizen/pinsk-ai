@@ -1,5 +1,9 @@
 
 
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -271,7 +275,7 @@ async function initializeDatabase() {
 
   await pool.query(`
     UPDATE users
-    SET role = 'PRO'
+    SET role = 'OWNER'
     WHERE LOWER(email) = LOWER($1)
   `, [LIMITED_OWNER_EMAIL]);
 
@@ -496,12 +500,15 @@ function clearSessionCookie(res, req) {
 }
 
 function publicUser(user) {
+  const email = String(user.email || "").toLowerCase();
+
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     role: user.role,
-    plan: user.role
+    plan: user.role,
+    isAdmin: user.role === "OWNER" && email === OWNER_EMAIL
   };
 }
 
@@ -602,13 +609,13 @@ async function auth(req, res, next) {
 
     if (
       user.email.toLowerCase() === LIMITED_OWNER_EMAIL &&
-      user.role !== "PRO"
+      user.role !== "OWNER"
     ) {
       await pool.query(
-        "UPDATE users SET role = 'PRO' WHERE id = $1",
+        "UPDATE users SET role = 'OWNER' WHERE id = $1",
         [user.id]
       );
-      user.role = "PRO";
+      user.role = "OWNER";
     }
 
     if (Number(user.is_blocked) === 1) {
@@ -637,9 +644,15 @@ async function auth(req, res, next) {
 }
 
 function requireOwner(req, res, next) {
-  if (req.user?.role !== "OWNER") {
+  const email = String(req.user?.email || "").toLowerCase();
+
+  // Роль OWNER у второго аккаунта не даёт доступ к админ-панели.
+  if (
+    req.user?.role !== "OWNER" ||
+    email !== OWNER_EMAIL
+  ) {
     return res.status(403).json({
-      error: "Доступ разрешён только владельцу Pinsk."
+      error: "Доступ к админ-панели разрешён только основному владельцу Pinsk."
     });
   }
 
@@ -871,11 +884,9 @@ app.post("/api/auth/verify-email", async (req, res) => {
 
     const userId = crypto.randomUUID();
     const userRole =
-      email === OWNER_EMAIL
+      email === OWNER_EMAIL || email === LIMITED_OWNER_EMAIL
         ? "OWNER"
-        : email === LIMITED_OWNER_EMAIL
-          ? "PRO"
-          : "FREE";
+        : "FREE";
 
     const inserted = await client.query(`
       INSERT INTO users (
@@ -1054,13 +1065,13 @@ app.post("/api/auth/login", async (req, res) => {
 
     if (
       email === LIMITED_OWNER_EMAIL &&
-      user.role !== "PRO"
+      user.role !== "OWNER"
     ) {
       await pool.query(
-        "UPDATE users SET role = 'PRO' WHERE id = $1",
+        "UPDATE users SET role = 'OWNER' WHERE id = $1",
         [user.id]
       );
-      user.role = "PRO";
+      user.role = "OWNER";
     }
 
     await issueSession(user, res, req);
@@ -3068,4 +3079,5 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
