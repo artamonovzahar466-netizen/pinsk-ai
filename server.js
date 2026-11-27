@@ -1,7 +1,5 @@
 
 
-
-
 "use strict";
 
 const express = require("express");
@@ -30,7 +28,9 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const IMAGE_MODEL = "gpt-image-2.6-sunburst";
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+const CLOUDFLARE_ACCOUNT_ID =
+  process.env.CLOUDFLARE_ACCOUNT_ID || "2b8f981543ffb8d68aace4fa3a205747";
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 
 if (!process.env.DATABASE_URL) {
@@ -1511,7 +1511,7 @@ app.get("/api/status", async (req, res) => {
       imageModel: IMAGE_MODEL,
       apiKeyConfigured: keys.some(isKeyActive),
       uploadsEnabled: true,
-      imageGenerationEnabled: true,
+      imageGenerationEnabled: Boolean(process.env.CLOUDFLARE_API_TOKEN),
       webSearchEnabled: Boolean(process.env.TAVILY_API_KEY)
     });
   } catch (error) {
@@ -2433,62 +2433,87 @@ app.post(
 
 
 // ==========================================
-// OPENAI IMAGE GENERATION
+// CLOUDFLARE WORKERS AI — IMAGE GENERATION
 // ==========================================
 
-async function generateOpenAIImage(prompt) {
-  const apiKey = process.env.OPENAI_API_KEY;
+async function generateCloudflareImage(prompt) {
+  const apiToken = String(
+    process.env.CLOUDFLARE_API_TOKEN || ""
+  ).trim();
 
-  if (!apiKey) {
-    const error = new Error("OPENAI_API_KEY не настроен в Render.");
+  const accountId = String(CLOUDFLARE_ACCOUNT_ID || "").trim();
+
+  if (!apiToken) {
+    const error = new Error(
+      "CLOUDFLARE_API_TOKEN не настроен в Render."
+    );
     error.status = 503;
     throw error;
   }
 
-  const response = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: IMAGE_MODEL,
-      prompt: String(prompt).slice(0, 32000),
-      n: 1,
-      size: "1024x1024",
-      quality: "high",
-      output_format: "png",
-      moderation: "auto"
-    }),
-    signal: AbortSignal.timeout(180000)
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
+  if (!accountId) {
     const error = new Error(
-      data?.error?.message || `OpenAI Images API вернул HTTP ${response.status}`
+      "CLOUDFLARE_ACCOUNT_ID не настроен в Render."
     );
-    error.status = response.status;
+    error.status = 503;
     throw error;
   }
 
-  const imageData = data?.data?.[0]?.b64_json;
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${IMAGE_MODEL}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: String(prompt).slice(0, 2048),
+        steps: 4
+      }),
+      signal: AbortSignal.timeout(180000)
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    const providerError =
+      data?.errors?.map(item => item.message).join("; ") ||
+      data?.error?.message ||
+      `Cloudflare Workers AI HTTP ${response.status}`;
+
+    const error = new Error(providerError);
+    error.status = response.status || 500;
+
+    console.error("Cloudflare Workers AI:", providerError);
+
+    throw error;
+  }
+
+  const imageData = data?.result?.image;
 
   if (typeof imageData !== "string" || !imageData) {
-    throw new Error("OpenAI не вернул готовое изображение.");
+    throw new Error(
+      "Cloudflare Workers AI не вернул готовое изображение."
+    );
   }
 
   const imageBuffer = Buffer.from(imageData, "base64");
 
-  if (!imageBuffer.length || imageBuffer.length > 20 * 1024 * 1024) {
-    throw new Error("OpenAI вернул изображение некорректного размера.");
+  if (
+    !imageBuffer.length ||
+    imageBuffer.length > 20 * 1024 * 1024
+  ) {
+    throw new Error(
+      "Cloudflare вернул изображение некорректного размера."
+    );
   }
 
   return {
     mimeType: "image/png",
     data: imageData,
-    text: data?.data?.[0]?.revised_prompt || ""
+    text: ""
   };
 }
 
@@ -2535,7 +2560,7 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const result = await generateOpenAIImage(prompt);
+    const result = await generateCloudflareImage(prompt);
 
     res.json({
       success: true,
@@ -2547,24 +2572,30 @@ async function imageGenerationHandler(req, res) {
     });
 
   } catch (error) {
-    console.error("OpenAI image generation error:", error.message);
+    console.error(
+      "Cloudflare Workers AI image generation error:",
+      error.message
+    );
 
     if (reserved) {
       await releaseCounter(req.user.id, "images", 1)
         .catch(() => {});
     }
 
-    const status = error.name === "TimeoutError" ||
+    const status =
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
       error.status === 429 ||
-      (error.status >= 500 && error.status <= 599) ||
-      error.status === 503
+      error.status === 401 ||
+      error.status === 403 ||
+      (error.status >= 500 && error.status <= 599)
         ? 503
         : 500;
 
     res.status(status).json({
       error: status === 503
-        ? "Сервис генерации изображений временно недоступен. Попробуй немного позже."
-        : "Не удалось создать изображение. Проверь описание и настройки API."
+        ? "Cloudflare Workers AI временно недоступен, превышен лимит или не хватает разрешений. Попробуй позже."
+        : "Не удалось создать изображение. Проверь описание и настройки Cloudflare."
     });
   }
 }
@@ -2813,7 +2844,7 @@ async function startServer() {
       console.log("Порт:", PORT);
       console.log("База данных: Supabase PostgreSQL");
       console.log("Модель чата:", MODEL);
-      console.log("Модель изображений:", IMAGE_MODEL);
+      console.log("Модель изображений Cloudflare:", IMAGE_MODEL);
       console.log("OWNER:", OWNER_EMAIL);
       console.log("Gemini API-ключей:", keys.length);
       console.log("Активных Gemini API-ключей:", activeKeys);
