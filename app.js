@@ -16,6 +16,7 @@
 const $ = id => document.getElementById(id);
 
 const OWNER_EMAIL = "artamonovzahar466@gmail.com";
+const LIMITED_OWNER_EMAIL = "artomov.sergeij@gmail.com";
 
 const STORAGE = {
   chats: "pinsk_chats",
@@ -48,9 +49,13 @@ let voiceActive = false;
 let voiceChatId = null;
 let voiceBusy = false;
 let voiceRecognitionStarting = false;
-let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "JBFqnCBsd6RMkjVDRZzb";
-const PINSK_VOICE_IDS = ["JBFqnCBsd6RMkjVDRZzb", "onwK4e9ZLuTAKqWW03F9", "EXAVITQu4vr4xnSDxMaL"];
-if (!PINSK_VOICE_IDS.includes(selectedVoicePreset)) selectedVoicePreset = PINSK_VOICE_IDS[0];
+const ELEVENLABS_VOICES = {
+  adam: "pNInz6obpgDQGcFmaJgB",
+  antoni: "ErXwobaYiN019PkySvjV",
+  rachel: "21m00Tcm4TlvDq8ikWAM"
+};
+let selectedVoicePreset = localStorage.getItem("pinsk_voice_preset") || "adam";
+if (!Object.prototype.hasOwnProperty.call(ELEVENLABS_VOICES, selectedVoicePreset)) selectedVoicePreset = "adam";
 let voiceAudio = null;
 let voiceAudioUrl = null;
 let voicePlaybackResolve = null;
@@ -108,6 +113,10 @@ function makeId() {
 
 function isOwner() {
   return String(currentUser?.role || "").toUpperCase() === "OWNER";
+}
+
+function isAdmin() {
+  return Boolean(currentUser?.isAdmin);
 }
 
 /* =========================================
@@ -741,7 +750,7 @@ function updateProfile() {
       "Бесплатный план";
   }
 
-  if (isOwner()) addAdminNavigation();
+  if (isAdmin()) addAdminNavigation();
   else removeAdminNavigation();
 }
 
@@ -1562,7 +1571,7 @@ function renderPage(page) {
 
   if (currentPage === "voice" && page !== "voice") stopVoice();
 
-  if (page === "admin" && !isOwner()) {
+  if (page === "admin" && !isAdmin()) {
     toast("Доступ к админ-панели разрешён только владельцу.");
     page = "chat";
   }
@@ -1706,9 +1715,9 @@ function renderPageContent(page) {
           <div class="voice-status" id="voiceStatus">Нажми «Начать разговор» и разреши доступ к микрофону.</div>
           <label class="voice-select-label" for="voicePreset">Голос Pinsk</label>
           <select id="voicePreset" class="voice-select">
-            <option value="JBFqnCBsd6RMkjVDRZzb">George — мужской, мягкий и дружелюбный</option>
-            <option value="onwK4e9ZLuTAKqWW03F9">Daniel — мужской, уверенный</option>
-            <option value="EXAVITQu4vr4xnSDxMaL">Sarah — женский, спокойный</option>
+            <option value="adam">Adam — молодой мужской</option>
+            <option value="antoni">Antoni — мягкий мужской</option>
+            <option value="rachel">Rachel — женский</option>
           </select>
           <div class="voice-controls">
             <button class="primary-button voice-start-button" id="voiceStart">🎙 Начать разговор</button>
@@ -2500,7 +2509,7 @@ function addLibraryItem() {
    ========================================= */
 
 function addAdminNavigation() {
-  if (!isOwner()) return;
+  if (!isAdmin()) return;
   if (document.querySelector('[data-page="admin"]')) return;
 
   const nav = document.querySelector("#sidebar .navigation") ||
@@ -2529,7 +2538,7 @@ async function renderAdmin() {
   const view = getPageView();
   if (!view) return;
 
-  if (!isOwner()) {
+  if (!isAdmin()) {
     view.innerHTML = `
       <div class="page-content">
         <h2>Доступ запрещён</h2>
@@ -2664,7 +2673,7 @@ async function speakAnswer(text) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text: cleanText,
-      voiceId: selectedVoicePreset,
+      voiceId: ELEVENLABS_VOICES[selectedVoicePreset] || ELEVENLABS_VOICES.adam,
       language: language === "en" ? "en" : "ru"
     }),
     signal: voiceSpeechAbort.signal
