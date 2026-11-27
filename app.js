@@ -1,5 +1,16 @@
 
 
+
+
+
+
+
+
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -36,7 +47,21 @@ let currentChatId = null;
 let currentPage = "chat";
 let usageData = null;
 let isSending = false;
-let language = localStorage.getItem(STORAGE.language) || "ru";
+const APP_LANGUAGES = {
+  "ru-RU": "Русский",
+  "kk-KZ": "Қазақша",
+  "en-GB": "English",
+  "fr-FR": "Français",
+  "es-ES": "Español",
+  "it-IT": "Italiano",
+  "az-AZ": "Azərbaycanca",
+  "zh-CN": "中文（简体）"
+};
+const APP_LANGUAGE_CODES = Object.keys(APP_LANGUAGES);
+let language = localStorage.getItem(STORAGE.language) || "ru-RU";
+if (language === "ru") language = "ru-RU";
+if (language === "en") language = "en-GB";
+if (!APP_LANGUAGE_CODES.includes(language)) language = "ru-RU";
 let recognition = null;
 let voiceActive = false;
 let voiceChatId = null;
@@ -1422,7 +1447,7 @@ async function sendMessage(value, options = {}) {
     if (imageMode) {
       const data = await api("/api/images/generate", {
         method: "POST",
-        body: JSON.stringify({ prompt: message })
+        body: JSON.stringify({ prompt: message, language })
       });
 
       loading?.remove();
@@ -1445,6 +1470,7 @@ async function sendMessage(value, options = {}) {
       const formData = new FormData();
 
       formData.append("message", message || "Проанализируй прикреплённые файлы.");
+      formData.append("language", language);
       formData.append("conversationId", options.voiceSession ? (voiceChatId || makeId()) : (currentChatId || makeId()));
       if (options.voiceSession) formData.append("voiceMode", "true");
       if (options.voiceSession) formData.append("voiceLanguage", voiceLanguage);
@@ -1953,7 +1979,7 @@ async function generateStudioImage(event) {
   try {
     const data = await api("/api/images/generate", {
       method: "POST",
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, language })
     });
     const source = safeImageSource(data.image || data.imageUrl || data.url);
     if (!source) throw new Error("Сервер не вернул изображение.");
@@ -1999,7 +2025,7 @@ async function generateStudioWebsite(event) {
   try {
     const data = await api("/api/design/generate", {
       method: "POST",
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, language })
     });
 
     studioFiles = {
@@ -2884,7 +2910,7 @@ function startInlineVoice() {
   try {
     const instance = new SpeechRecognition();
     recognition = instance;
-    instance.lang = language === "en" ? "en-US" : "ru-RU";
+    instance.lang = language;
     instance.continuous = false;
     instance.interimResults = false;
     instance.onstart = () => $("voiceButton")?.classList.add("recording");
@@ -3046,11 +3072,11 @@ function showSettings() {
   showModal(`
     <h2>Настройки Pinsk</h2>
 
-    <label>Язык</label>
+    <label>Язык ответов Pinsk</label>
     <select id="languageSelect">
-      <option value="ru" ${language === "ru" ? "selected" : ""}>Русский</option>
-      <option value="en" ${language === "en" ? "selected" : ""}>English</option>
+      ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
+    <p class="settings-hint">Выбранный язык используется в чате, голосовом режиме, генерации сайтов и подсказках для изображений. Язык элементов интерфейса пока остаётся русским.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3064,6 +3090,8 @@ function showSettings() {
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
     localStorage.setItem(STORAGE.language, language);
+    voiceLanguage = language;
+    localStorage.setItem("pinsk_voice_language", voiceLanguage);
 
     localStorage.setItem(
       STORAGE.reasoning,
