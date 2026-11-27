@@ -6,7 +6,6 @@
 
 
 
-
 "use strict";
 
 /* =========================================
@@ -1415,6 +1414,8 @@ async function sendMessage(value, options = {}) {
     imageMode ? "Pinsk создаёт изображение..." : "Pinsk думает..."
   );
 
+  let voiceTurnSucceeded = false;
+
   try {
     if (imageMode) {
       const data = await api("/api/images/generate", {
@@ -1463,6 +1464,7 @@ async function sendMessage(value, options = {}) {
 
       if (options.voiceSession) {
         if (options.speak) await speakAnswer(answer);
+        voiceTurnSucceeded = true;
       } else {
         renderMessage("assistant", answer);
         if (options.speak) speakAnswer(answer);
@@ -1477,7 +1479,21 @@ async function sendMessage(value, options = {}) {
   } catch (error) {
     loading?.remove();
     if (options.voiceSession) {
-      setVoiceStatus("Не удалось получить ответ: " + error.message, "error");
+      // Не перезапускаем микрофон поверх ошибки TTS: иначе статус ошибки
+      // мгновенно заменяется на «Слушаю тебя…» и пользователь не видит причину.
+      voiceActive = false;
+      if (recognition) {
+        const failedRecognition = recognition;
+        recognition = null;
+        try {
+          failedRecognition.onresult = null;
+          failedRecognition.onerror = null;
+          failedRecognition.onstart = null;
+          failedRecognition.onend = null;
+          failedRecognition.stop();
+        } catch (_) {}
+      }
+      setVoiceStatus("Не удалось озвучить ответ: " + error.message, "error");
     } else {
       renderMessage(
         "assistant",
@@ -1490,7 +1506,8 @@ async function sendMessage(value, options = {}) {
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
-      if (voiceActive) startVoiceRecognition();
+      // Следующий вопрос слушаем только после успешно воспроизведённого ответа.
+      if (voiceActive && voiceTurnSucceeded) startVoiceRecognition();
     }
   }
 }
@@ -2654,10 +2671,12 @@ async function speakAnswer(text) {
     .trim()
     .slice(0, 12000);
 
-  if (!cleanText) return;
+  if (!cleanText) throw new Error("В ответе нет текста для озвучивания.");
 
   if (voiceAudio) {
     voiceAudio.pause();
+    voiceAudio.removeAttribute("src");
+    voiceAudio.load();
     voiceAudio = null;
   }
   if (voiceAudioUrl) {
@@ -2665,55 +2684,90 @@ async function speakAnswer(text) {
     voiceAudioUrl = null;
   }
 
-  setVoiceStatus("Готовлю голосовой ответ...", "thinking");
-  voiceSpeechAbort = new AbortController();
-  const response = await fetch("/api/voice/speech", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      text: cleanText,
-      voiceId: ELEVENLABS_VOICES[selectedVoicePreset] || ELEVENLABS_VOICES.adam,
-      language: language === "en" ? "en" : "ru"
-    }),
-    signal: voiceSpeechAbort.signal
-  });
-  voiceSpeechAbort = null;
+  setVoiceStatus("Создаю голосовой ответ…", "thinking");
+  const controller = new AbortController();
+  voiceSpeechAbort = controller;
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Не удалось создать голос (${response.status}).`);
+  try {
+    const response = await fetch("/api/voice/speech", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Accept": "audio/mpeg" },
+      body: JSON.stringify({
+        text: cleanText,
+        voiceId: ELEVENLABS_VOICES[selectedVoicePreset] || ELEVENLABS_VOICES.adam,
+        language: language === "en" ? "en" : "ru"
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const rawError = await response.text().catch(() => "");
+      let message = rawError;
+      try {
+        const parsed = JSON.parse(rawError);
+        message = parsed.error || parsed.message || rawError;
+      } catch (_) {}
+      throw new Error(message || `Сервер озвучивания вернул ошибку ${response.status}.`);
+    }
+
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    const audioBlob = await response.blob();
+    if (!audioBlob.size) throw new Error("ElevenLabs вернул пустой аудиофайл.");
+    if (contentType && !contentType.includes("audio") && !contentType.includes("octet-stream")) {
+      const bodyText = await audioBlob.text().catch(() => "");
+      throw new Error("Вместо аудио сервер вернул " + contentType + (bodyText ? ": " + bodyText.slice(0, 240) : "."));
+    }
+
+    voiceAudioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio();
+    voiceAudio = audio;
+    audio.preload = "auto";
+    audio.src = voiceAudioUrl;
+
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        audio.onended = null;
+        audio.onerror = null;
+        audio.oncanplay = null;
+        voicePlaybackResolve = null;
+        if (error) reject(error);
+        else resolve();
+      };
+      voicePlaybackResolve = () => finish();
+      audio.onplay = () => setVoiceStatus("Отвечаю голосом…", "speaking");
+      audio.onended = () => finish();
+      audio.onerror = () => {
+        const mediaError = audio.error;
+        const details = mediaError ? ` (код ${mediaError.code}${mediaError.message ? ": " + mediaError.message : ""})` : "";
+        finish(new Error("Браузер не смог декодировать или воспроизвести MP3" + details + "."));
+      };
+      audio.oncanplay = () => {
+        audio.play().catch(error => {
+          const reason = error?.name === "NotAllowedError"
+            ? "Браузер заблокировал воспроизведение. Нажми «Начать разговор» ещё раз и разреши звук."
+            : error?.message || "неизвестная ошибка воспроизведения";
+          finish(new Error("Не удалось запустить аудио: " + reason));
+        });
+      };
+      audio.load();
+    });
+  } finally {
+    if (voiceSpeechAbort === controller) voiceSpeechAbort = null;
+    if (voiceAudio) {
+      voiceAudio.pause();
+      voiceAudio.removeAttribute("src");
+      voiceAudio.load();
+      voiceAudio = null;
+    }
+    if (voiceAudioUrl) {
+      URL.revokeObjectURL(voiceAudioUrl);
+      voiceAudioUrl = null;
+    }
   }
-
-  const audioBlob = await response.blob();
-  if (!audioBlob.size) throw new Error("Сервер вернул пустой аудиофайл.");
-
-  voiceAudioUrl = URL.createObjectURL(audioBlob);
-  voiceAudio = new Audio(voiceAudioUrl);
-  voiceAudio.preload = "auto";
-
-  await new Promise((resolve, reject) => {
-    const audio = voiceAudio;
-    let settled = false;
-    const finish = error => {
-      if (settled) return;
-      settled = true;
-      audio.onended = null;
-      audio.onerror = null;
-      voicePlaybackResolve = null;
-      if (error) reject(error);
-      else resolve();
-    };
-    voicePlaybackResolve = () => finish();
-    audio.onplay = () => setVoiceStatus("Говорю тебе...", "speaking");
-    audio.onended = () => finish();
-    audio.onerror = () => finish(new Error("Не удалось воспроизвести голосовой ответ."));
-    audio.play().catch(finish);
-  });
-
-  if (voiceAudioUrl) URL.revokeObjectURL(voiceAudioUrl);
-  voiceAudioUrl = null;
-  voiceAudio = null;
 }
 
 function startInlineVoice() {
