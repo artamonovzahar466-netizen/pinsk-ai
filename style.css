@@ -1210,16 +1210,60 @@ button {
 .composer textarea { min-height: 64px; max-height: 260px; }
 
 
-/* FLOATING COMPOSER — без изменения размеров */
+/* ==========================================
+   PINSK — FLOATING CHAT COMPOSER
+========================================== */
 
-.main:has(.composer-area) .composer-area {
-  background: transparent !important;
-  border: none !important;
+/* Чат занимает доступную высоту */
+.main:has(.composer-area) {
+  position: relative;
+  min-height: 0;
+}
+
+.main:has(.composer-area) .workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: 12px;
+  border: 0 !important;
   box-shadow: none !important;
 }
 
+/* Нижняя область становится прозрачной */
+.main:has(.composer-area) .composer-area {
+  position: relative;
+  z-index: 10;
+  flex: 0 0 auto;
+  width: 100%;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding-top: 8px;
+}
+
+/* Само поле — отдельная плавающая панель */
 .main:has(.composer-area) .composer {
-  box-shadow: 0 8px 35px #00000045 !important;
+  position: relative;
+  z-index: 11;
+  background: #1d1d25 !important;
   border: 1px solid #41404e !important;
   border-radius: 24px !important;
+  box-shadow: 0 8px 35px #00000045 !important;
+}
+
+/* Предупреждение под полем */
+.main:has(.composer-area) .disclaimer {
+  position: relative;
+  z-index: 11;
+  text-align: center;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  margin-top: 7px;
+  padding-bottom: 4px;
+}
+
+/* Убираем декоративную полосу */
+.main:has(.composer-area) .composer-area::before {
+  content: none !important;
+  display: none !important;
 }
