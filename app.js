@@ -1,5 +1,13 @@
 
 
+
+
+
+
+
+
+
+
 "use strict";
 
 /* =========================================
@@ -36,6 +44,8 @@ let currentChatId = null;
 let currentPage = "chat";
 let usageData = null;
 let isSending = false;
+let activeRequestController = null;
+let activeLoadingMessage = null;
 const APP_LANGUAGES = {
   "ru-RU": "Русский",
   "kk-KZ": "Қазақша",
@@ -1370,10 +1380,45 @@ function setSendingState(value) {
   isSending = value;
 
   const sendButton = $("sendButton");
+  const stopButton = $("stopGenerationButton");
   const imageButton = $("imageModeButton");
+  const reasoningButton = $("reasoningButton");
 
-  if (sendButton) sendButton.disabled = value;
+  if (sendButton) sendButton.hidden = value;
+  if (stopButton) stopButton.hidden = !value;
   if (imageButton) imageButton.disabled = value;
+  if (reasoningButton) reasoningButton.disabled = value;
+}
+
+function stopCurrentGeneration() {
+  if (!activeRequestController || activeRequestController.signal.aborted) return;
+  activeRequestController.abort();
+  activeLoadingMessage?.remove();
+  activeLoadingMessage = null;
+  const stopMessages = {
+    "ru-RU": "Ответ остановлен.", "kk-KZ": "Жауап тоқтатылды.",
+    "en-GB": "Response stopped.", "fr-FR": "Réponse arrêtée.",
+    "es-ES": "Respuesta detenida.", "it-IT": "Risposta interrotta.",
+    "az-AZ": "Cavab dayandırıldı.", "zh-CN": "回答已停止。"
+  };
+  toast(stopMessages[language] || stopMessages["ru-RU"]);
+}
+
+function installStopGenerationButton() {
+  const form = $("chatForm");
+  const sendButton = $("sendButton");
+  if (!form || !sendButton || $("stopGenerationButton")) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "stopGenerationButton";
+  button.className = "send-button stop-generation-button";
+  button.textContent = "■";
+  button.title = "Остановить ответ";
+  button.setAttribute("aria-label", "Остановить ответ");
+  button.hidden = true;
+  button.addEventListener("click", stopCurrentGeneration);
+  sendButton.parentElement.insertBefore(button, sendButton.nextSibling);
 }
 
 function createLoadingMessage(text = "Pinsk думает...") {
@@ -1413,6 +1458,8 @@ async function sendMessage(value, options = {}) {
   }
 
   setSendingState(true);
+  const requestController = new AbortController();
+  activeRequestController = requestController;
 
   if (currentPage === "chat" && $("welcome")) {
     $("welcome").style.display = "none";
@@ -1432,6 +1479,7 @@ async function sendMessage(value, options = {}) {
     imageMode ? "Pinsk создаёт изображение..." :
       files.length ? "Pinsk изучает вложения..." : "Pinsk думает..."
   );
+  activeLoadingMessage = loading;
 
   // Keep one calm status instead of cycling through several phrases.
   // This does not imply that the model is progressing through separate stages.
@@ -1440,10 +1488,12 @@ async function sendMessage(value, options = {}) {
     if (imageMode) {
       const data = await api("/api/images/generate", {
         method: "POST",
-        body: JSON.stringify({ prompt: message, language })
+        body: JSON.stringify({ prompt: message, language }),
+        signal: requestController.signal
       });
 
       loading?.remove();
+      if (activeLoadingMessage === loading) activeLoadingMessage = null;
 
       const image = data.image || data.imageUrl || data.url ||
         data.data?.[0]?.url || "";
@@ -1473,34 +1523,30 @@ async function sendMessage(value, options = {}) {
       });
 
       let data;
-      if (options.voiceSession) {
-        const voiceRequestController = new AbortController();
-        const voiceRequestTimer = window.setTimeout(() => voiceRequestController.abort(), 90000);
-        try {
-          data = await api("/api/chat", {
-            method: "POST",
-            body: formData,
-            signal: voiceRequestController.signal
-          });
-        } catch (requestError) {
-          if (requestError.name === "AbortError") {
-            throw new Error("Pinsk не получил ответ от ИИ за 90 секунд. Попробуй сказать ещё раз.");
-          }
-          throw requestError;
-        } finally {
-          window.clearTimeout(voiceRequestTimer);
-        }
-      } else {
+      let voiceTimedOut = false;
+      const voiceRequestTimer = options.voiceSession
+        ? window.setTimeout(() => { voiceTimedOut = true; requestController.abort(); }, 90000)
+        : null;
+      try {
         data = await api("/api/chat", {
           method: "POST",
-          body: formData
+          body: formData,
+          signal: requestController.signal
         });
+      } catch (requestError) {
+        if (requestError.name === "AbortError" && voiceTimedOut) {
+          throw new Error("Pinsk не получил ответ от ИИ за 90 секунд. Попробуй сказать ещё раз.");
+        }
+        throw requestError;
+      } finally {
+        if (voiceRequestTimer) window.clearTimeout(voiceRequestTimer);
       }
 
       if (options.voiceSession) voiceChatId = data.conversationId || voiceChatId;
       else currentChatId = data.conversationId || currentChatId;
 
       loading?.remove();
+      if (activeLoadingMessage === loading) activeLoadingMessage = null;
 
       const answer = data.answer || "Нет ответа.";
 
@@ -1519,17 +1565,24 @@ async function sendMessage(value, options = {}) {
 
   } catch (error) {
     loading?.remove();
-    if (options.voiceSession) {
-      setVoiceStatus("Ошибка голосового ответа: " + error.message, "error");
+    if (activeLoadingMessage === loading) activeLoadingMessage = null;
+    if (error?.name === "AbortError" || requestController.signal.aborted) {
+      if (options.voiceSession) setVoiceStatus("Ответ остановлен.", "idle");
     } else {
-      renderMessage(
-        "assistant",
-        "Не удалось выполнить запрос: " + error.message
-      );
+      if (options.voiceSession) {
+        setVoiceStatus("Ошибка голосового ответа: " + error.message, "error");
+      } else {
+        renderMessage(
+          "assistant",
+          "Не удалось выполнить запрос: " + error.message
+        );
+      }
+      toast(error.message);
     }
-    toast(error.message);
 
   } finally {
+    if (activeRequestController === requestController) activeRequestController = null;
+    if (activeLoadingMessage === loading) activeLoadingMessage = null;
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
@@ -1557,7 +1610,7 @@ function installImageModeButton() {
 
   button.type = "button";
   button.id = "imageModeButton";
-  button.className = "pinsk-image-mode";
+  button.className = "tool-button pinsk-image-mode";
   button.textContent = "🎨 Создать изображение";
   button.title = "Переключить режим генерации изображений";
 
@@ -1568,6 +1621,7 @@ function installImageModeButton() {
     button.textContent = imageMode
       ? "✕ Режим изображения"
       : "🎨 Создать изображение";
+    applyLanguage();
 
     if (imageMode) {
       if (selectedFiles.length) clearSelectedFiles();
@@ -1575,11 +1629,13 @@ function installImageModeButton() {
       toast("Режим генерации включён. Опиши изображение.");
 
       if ($("prompt")) {
+        $("prompt").dataset.originalPlaceholder = "Опиши изображение, которое нужно создать...";
         $("prompt").placeholder = "Опиши изображение, которое нужно создать...";
         $("prompt").focus();
       }
     } else {
       if ($("prompt")) {
+        $("prompt").dataset.originalPlaceholder = "Спроси что-нибудь...";
         $("prompt").placeholder = "Спроси что-нибудь...";
       }
 
@@ -1587,10 +1643,15 @@ function installImageModeButton() {
     }
   });
 
-  const attachButton = $("attachButton");
+  const composerLeft = form.querySelector(".composer-left");
+  const reasoningButton = $("reasoningButton");
 
-  if (attachButton && attachButton.parentElement === form) {
-    form.insertBefore(button, attachButton);
+  if (composerLeft) {
+    if (reasoningButton?.parentElement === composerLeft) {
+      reasoningButton.insertAdjacentElement("afterend", button);
+    } else {
+      composerLeft.appendChild(button);
+    }
   } else {
     form.appendChild(button);
   }
@@ -1639,7 +1700,7 @@ function renderPage(page) {
     library: "Библиотека",
     plugins: "Плагины",
     analysis: "Анализ данных",
-    studio: "Студия дизайна",
+    studio: "Инструменты Pinsk",
     voice: "Голосовой режим",
     plans: "Тарифы",
     admin: "Админ-панель"
@@ -1848,7 +1909,7 @@ function installStudioNavigation() {
   button.type = "button";
   button.dataset.page = "studio";
   button.className = "nav-item";
-  button.innerHTML = '<span aria-hidden="true">✦</span><span>Студия дизайна</span>';
+  button.innerHTML = '<span aria-hidden="true">✦</span><span>Инструменты Pinsk</span>';
   nav.appendChild(button);
 }
 
@@ -1860,7 +1921,7 @@ function renderStudio() {
     <div class="page-content studio-page">
       <div class="studio-heading">
         <div>
-          <h2>Студия дизайна</h2>
+          <h2>Инструменты Pinsk</h2>
           <p>Создавай изображения, макеты и полноценные сайты с помощью Pinsk AI.</p>
         </div>
         <span class="studio-mark">P</span>
@@ -3058,6 +3119,577 @@ function installVoiceButton() {
 }
 
 /* =========================================
+   ЛОКАЛИЗАЦИЯ ИНТЕРФЕЙСА
+   ========================================= */
+
+const UI_TRANSLATIONS = {
+  "en-GB": {
+    "＋ Новый чат":"＋ New chat",
+    "Улучшить тариф ↗":"Upgrade plan ↗",
+    "Перейти на PRO ↗":"Upgrade to PRO ↗",
+    "⚙ Админ-панель":"⚙ Admin panel",
+    "Обзор Pinsk":"Pinsk overview",
+    "Аккаунт":"Account",
+    "Использование":"Usage",
+    "Загрузка...":"Loading...",
+    "Мои проекты":"My projects",
+    "Новый проект":"New project",
+    "Добавить материал":"Add material",
+    "Пока нет проектов.":"No projects yet.",
+    "Библиотека пуста.":"The library is empty.",
+    "Удалить":"Delete",
+    "Создать":"Create",
+    "Голосовой режим":"Voice mode",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Just speak — Pinsk listens and replies aloud.",
+    "Не подключён":"Not connected",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"Press “Start conversation” and allow microphone access.",
+    "Язык разговора":"Conversation language",
+    "Тип голоса":"Voice type",
+    "Молодой / естественный":"Young / natural",
+    "Мужской":"Male",
+    "Женский":"Female",
+    "По умолчанию":"Default",
+    "Начать разговор":"Start conversation",
+    "Остановить":"Stop",
+    "Поиск в интернете":"Web search",
+    "Что будем искать?":"What should we search for?",
+    "Найти":"Search",
+    "Ищу...":"Searching...",
+    "Ищем информацию в интернете...":"Searching the web...",
+    "Краткий ответ":"Quick answer",
+    "Источники":"Sources",
+    "Анализ данных":"Data analysis",
+    "Загрузи документ, таблицу, PDF, текстовый файл или изображение и задай вопрос по его содержимому.":"Upload a document, spreadsheet, PDF, text file or image and ask a question about it.",
+    "Выбрать файл":"Choose file",
+    "Файл не выбран.":"No file selected.",
+    "Что нужно проанализировать?":"What should be analysed?",
+    "Проанализировать":"Analyse",
+    "Скачать изображение":"Download image",
+    "Генератор изображений":"Image generator",
+    "Предпросмотр":"Preview",
+    "Редактор кода":"Code editor",
+    "Обновить просмотр":"Refresh preview",
+    "Скачать файл":"Download file",
+    "Сайт создан. Можешь редактировать код, обновлять предпросмотр и скачивать файлы.":"Website created. You can edit the code, refresh the preview and download the files.",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"The selected language applies to the Pinsk interface, prompts and AI responses.",
+    "Голосовой режим":"Voice mode",
+    "Админ-панель":"Admin panel",
+    "Голосовой режим":"Voice mode",
+    "Админ-панель":"Admin panel",
+    "Генерация изображений":"Image generation",
+    "Создание сайтов":"Website builder",
+    "Редактор кода":"Code editor",
+    "Обновить просмотр":"Refresh preview",
+    "Скачать файл":"Download file",
+    "Скачать проект (HTML + CSS + JS)":"Download project (HTML + CSS + JS)",
+    "Предпросмотр":"Preview",
+    "Изолированный режим":"Sandboxed mode",
+    "До 5000 символов":"Up to 5,000 characters",
+    "Какой сайт или интерфейс создать?":"What website or interface should I create?",
+    "Опиши, какое изображение нужно создать":"Describe the image you want to create",
+    "Инструменты Pinsk":"Pinsk tools",
+    "Рабочее пространство":"Workspace", "Чат":"Chat", "Анализ данных":"Data analysis", "Инструменты Pinsk":"Pinsk tools", "История":"History",
+    "Ваш тариф":"Your plan", "Попробуйте возможности Pinsk PRO":"Try Pinsk PRO", "Улучшить тариф":"Upgrade plan", "Пользователь":"User", "Бесплатный план":"Free plan", "Перейти на PRO":"Upgrade to PRO",
+    "Чем могу помочь?":"How can I help?", "Я Pinsk — ваш интеллектуальный помощник.":"I’m Pinsk, your AI assistant.", "Написать текст":"Write text", "Письма, статьи и идеи":"Emails, articles and ideas", "Объяснить тему":"Explain a topic", "Понятные ответы":"Clear answers", "Написать код":"Write code", "Программирование":"Programming", "Найти идею":"Find an idea", "Творчество и проекты":"Creativity and projects",
+
+    "Новый чат":"New chat", "Чаты":"Chats", "Проекты":"Projects", "Библиотека":"Library",
+    "Обзор":"Overview", "Плагины":"Plugins", "Настройки":"Settings", "Профиль":"Profile",
+    "Выйти":"Sign out", "Тарифы":"Plans", "Файл":"File", "Глубокое мышление":"Deep thinking",
+    "Создать изображение":"Create image", "Режим изображения":"Image mode", "Спросите что-нибудь у Pinsk...":"Ask Pinsk anything...",
+    "Спроси что-нибудь...":"Ask anything...", "Опиши изображение, которое нужно создать...":"Describe the image you want to create...",
+    "Отправить":"Send", "Остановить ответ":"Stop response", "Сохранить":"Save", "Закрыть":"Close",
+    "Настройки Pinsk":"Pinsk settings", "Язык ответов Pinsk":"Pinsk response language", "Глубокое рассуждение":"Deep reasoning",
+    "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk can make mistakes. Check important information.",
+    "Создать сайт":"Create website", "Сгенерировать сайт":"Generate website", "Генерирую...":"Generating..."
+  },
+  "kk-KZ": {
+    "＋ Новый чат":"＋ Жаңа чат",
+    "Улучшить тариф ↗":"Тарифті жаңарту ↗",
+    "Перейти на PRO ↗":"PRO нұсқасына өту ↗",
+    "⚙ Админ-панель":"⚙ Әкімші панелі",
+    "Обзор Pinsk":"Pinsk шолуы",
+    "Аккаунт":"Аккаунт",
+    "Использование":"Пайдалану",
+    "Загрузка...":"Жүктелуде...",
+    "Мои проекты":"Менің жобаларым",
+    "Новый проект":"Жаңа жоба",
+    "Добавить материал":"Материал қосу",
+    "Пока нет проектов.":"Әзірге жобалар жоқ.",
+    "Библиотека пуста.":"Кітапхана бос.",
+    "Удалить":"Жою",
+    "Создать":"Жасау",
+    "Голосовой режим":"Дауыс режимі",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Сөйлей беріңіз — Pinsk тыңдап, дауыспен жауап береді.",
+    "Не подключён":"Қосылмаған",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"«Әңгімелесуді бастау» түймесін басып, микрофонға рұқсат беріңіз.",
+    "Язык разговора":"Әңгімелесу тілі",
+    "Тип голоса":"Дауыс түрі",
+    "Молодой / естественный":"Жас / табиғи",
+    "Мужской":"Ер адам",
+    "Женский":"Әйел",
+    "По умолчанию":"Әдепкі",
+    "Начать разговор":"Әңгімелесуді бастау",
+    "Остановить":"Тоқтату",
+    "Поиск в интернете":"Интернеттен іздеу",
+    "Что будем искать?":"Нені іздейміз?",
+    "Найти":"Іздеу",
+    "Ищу...":"Ізделуде...",
+    "Ищем информацию в интернете...":"Интернеттен ақпарат ізделуде...",
+    "Краткий ответ":"Қысқаша жауап",
+    "Источники":"Дереккөздер",
+    "Анализ данных":"Деректерді талдау",
+    "Выбрать файл":"Файл таңдау",
+    "Файл не выбран.":"Файл таңдалмаған.",
+    "Что нужно проанализировать?":"Нені талдау керек?",
+    "Проанализировать":"Талдау",
+    "Генератор изображений":"Сурет генераторы",
+    "Предпросмотр":"Алдын ала қарау",
+    "Редактор кода":"Код редакторы",
+    "Обновить просмотр":"Көріністі жаңарту",
+    "Скачать файл":"Файлды жүктеу",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"Таңдалған тіл Pinsk интерфейсіне, кеңестерге және AI жауаптарына қолданылады.",
+    "Голосовой режим":"Дауыс режимі",
+    "Админ-панель":"Әкімші панелі",
+    "Голосовой режим":"Дауыс режимі",
+    "Админ-панель":"Әкімші панелі",
+    "Генерация изображений":"Сурет жасау",
+    "Создание сайтов":"Сайт жасау",
+    "Редактор кода":"Код редакторы",
+    "Обновить просмотр":"Алдын ала қарауды жаңарту",
+    "Скачать файл":"Файлды жүктеу",
+    "Скачать проект (HTML + CSS + JS)":"Жобаны жүктеу (HTML + CSS + JS)",
+    "Предпросмотр":"Алдын ала қарау",
+    "Изолированный режим":"Оқшауланған режим",
+    "До 5000 символов":"5000 таңбаға дейін",
+    "Какой сайт или интерфейс создать?":"Қандай сайт немесе интерфейс жасау керек?",
+    "Опиши, какое изображение нужно создать":"Қандай сурет жасау керегін сипаттаңыз",
+    "Инструменты Pinsk":"Pinsk құралдары",
+    "Рабочее пространство":"Жұмыс кеңістігі", "Чат":"Чат", "Анализ данных":"Деректерді талдау", "Инструменты Pinsk":"Pinsk құралдары", "История":"Тарих",
+    "Ваш тариф":"Сіздің тарифіңіз", "Попробуйте возможности Pinsk PRO":"Pinsk PRO мүмкіндіктерін қолданып көріңіз", "Улучшить тариф":"Тарифті жаңарту", "Пользователь":"Пайдаланушы", "Бесплатный план":"Тегін жоспар", "Перейти на PRO":"PRO нұсқасына өту",
+    "Чем могу помочь?":"Қалай көмектесе аламын?", "Я Pinsk — ваш интеллектуальный помощник.":"Мен Pinsk — сіздің зияткерлік көмекшіңізбін.", "Написать текст":"Мәтін жазу", "Письма, статьи и идеи":"Хаттар, мақалалар және идеялар", "Объяснить тему":"Тақырыпты түсіндіру", "Понятные ответы":"Түсінікті жауаптар", "Написать код":"Код жазу", "Программирование":"Бағдарламалау", "Найти идею":"Идея табу", "Творчество и проекты":"Шығармашылық және жобалар",
+    "Новый чат":"Жаңа чат", "Чаты":"Чаттар", "Проекты":"Жобалар", "Библиотека":"Кітапхана",
+    "Обзор":"Шолу", "Плагины":"Плагиндер", "Настройки":"Баптаулар", "Профиль":"Профиль",
+    "Выйти":"Шығу", "Тарифы":"Тарифтер", "Файл":"Файл", "Глубокое мышление":"Терең ойлау",
+    "Создать изображение":"Сурет жасау", "Режим изображения":"Сурет режимі", "Спросите что-нибудь у Pinsk...":"Pinsk-ке сұрақ қойыңыз...",
+    "Спроси что-нибудь...":"Бірдеңе сұраңыз...", "Опиши изображение, которое нужно создать...":"Жасалатын суретті сипаттаңыз...",
+    "Отправить":"Жіберу", "Остановить ответ":"Жауапты тоқтату", "Сохранить":"Сақтау", "Закрыть":"Жабу",
+    "Настройки Pinsk":"Pinsk баптаулары", "Язык ответов Pinsk":"Pinsk жауаптарының тілі", "Глубокое рассуждение":"Терең пайымдау",
+    "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk қателесуі мүмкін. Маңызды ақпаратты тексеріңіз.",
+    "Создать сайт":"Сайт жасау", "Сгенерировать сайт":"Сайтты жасау", "Генерирую...":"Жасалуда..."
+  },
+  "fr-FR": {
+    "＋ Новый чат":"＋ Nouveau chat",
+    "Улучшить тариф ↗":"Améliorer l’offre ↗",
+    "Перейти на PRO ↗":"Passer à PRO ↗",
+    "⚙ Админ-панель":"⚙ Panneau admin",
+    "Обзор Pinsk":"Vue d’ensemble Pinsk",
+    "Аккаунт":"Compte",
+    "Использование":"Utilisation",
+    "Загрузка...":"Chargement...",
+    "Мои проекты":"Mes projets",
+    "Новый проект":"Nouveau projet",
+    "Добавить материал":"Ajouter un élément",
+    "Пока нет проектов.":"Aucun projet pour le moment.",
+    "Библиотека пуста.":"La bibliothèque est vide.",
+    "Удалить":"Supprimer",
+    "Создать":"Créer",
+    "Голосовой режим":"Mode vocal",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Parlez simplement : Pinsk écoute et répond à voix haute.",
+    "Не подключён":"Non connecté",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"Appuyez sur « Démarrer la conversation » et autorisez le microphone.",
+    "Язык разговора":"Langue de conversation",
+    "Тип голоса":"Type de voix",
+    "Молодой / естественный":"Jeune / naturel",
+    "Мужской":"Masculin",
+    "Женский":"Féminin",
+    "По умолчанию":"Par défaut",
+    "Начать разговор":"Démarrer la conversation",
+    "Остановить":"Arrêter",
+    "Поиск в интернете":"Recherche sur le Web",
+    "Что будем искать?":"Que souhaitez-vous rechercher ?",
+    "Найти":"Rechercher",
+    "Ищу...":"Recherche...",
+    "Ищем информацию в интернете...":"Recherche d’informations sur le Web...",
+    "Краткий ответ":"Réponse courte",
+    "Источники":"Sources",
+    "Анализ данных":"Analyse de données",
+    "Выбрать файл":"Choisir un fichier",
+    "Файл не выбран.":"Aucun fichier sélectionné.",
+    "Что нужно проанализировать?":"Que faut-il analyser ?",
+    "Проанализировать":"Analyser",
+    "Генератор изображений":"Générateur d’images",
+    "Предпросмотр":"Aperçu",
+    "Редактор кода":"Éditeur de code",
+    "Обновить просмотр":"Actualiser l’aperçu",
+    "Скачать файл":"Télécharger le fichier",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"La langue choisie s’applique à l’interface Pinsk, aux suggestions et aux réponses IA.",
+    "Голосовой режим":"Mode vocal",
+    "Админ-панель":"Panneau admin",
+    "Голосовой режим":"Mode vocal",
+    "Админ-панель":"Panneau admin",
+    "Генерация изображений":"Génération d’images",
+    "Создание сайтов":"Créateur de sites",
+    "Редактор кода":"Éditeur de code",
+    "Обновить просмотр":"Actualiser l’aperçu",
+    "Скачать файл":"Télécharger le fichier",
+    "Скачать проект (HTML + CSS + JS)":"Télécharger le projet (HTML + CSS + JS)",
+    "Предпросмотр":"Aperçu",
+    "Изолированный режим":"Mode isolé",
+    "До 5000 символов":"Jusqu’à 5 000 caractères",
+    "Какой сайт или интерфейс создать?":"Quel site ou interface créer ?",
+    "Опиши, какое изображение нужно создать":"Décrivez l’image à créer",
+    "Инструменты Pinsk":"Outils Pinsk",
+    "Рабочее пространство":"Espace de travail", "Чат":"Chat", "Анализ данных":"Analyse de données", "Инструменты Pinsk":"Outils Pinsk", "История":"Historique",
+    "Ваш тариф":"Votre offre", "Попробуйте возможности Pinsk PRO":"Découvrez Pinsk PRO", "Улучшить тариф":"Changer d’offre", "Пользователь":"Utilisateur", "Бесплатный план":"Offre gratuite", "Перейти на PRO":"Passer à PRO",
+    "Чем могу помочь?":"Comment puis-je vous aider ?", "Я Pinsk — ваш интеллектуальный помощник.":"Je suis Pinsk, votre assistant IA.", "Написать текст":"Rédiger un texte", "Письма, статьи и идеи":"E-mails, articles et idées", "Объяснить тему":"Expliquer un sujet", "Понятные ответы":"Des réponses claires", "Написать код":"Écrire du code", "Программирование":"Programmation", "Найти идею":"Trouver une idée", "Творчество и проекты":"Créativité et projets",
+    "Новый чат":"Nouveau chat", "Чаты":"Discussions", "Проекты":"Projets", "Библиотека":"Bibliothèque",
+    "Обзор":"Vue d’ensemble", "Плагины":"Extensions", "Настройки":"Paramètres", "Профиль":"Profil",
+    "Выйти":"Se déconnecter", "Тарифы":"Offres", "Файл":"Fichier", "Глубокое мышление":"Réflexion approfondie",
+    "Создать изображение":"Créer une image", "Режим изображения":"Mode image", "Спросите что-нибудь у Pinsk...":"Posez une question à Pinsk...",
+    "Спроси что-нибудь...":"Posez une question...", "Опиши изображение, которое нужно создать...":"Décrivez l’image à créer...",
+    "Отправить":"Envoyer", "Остановить ответ":"Arrêter la réponse", "Сохранить":"Enregistrer", "Закрыть":"Fermer",
+    "Настройки Pinsk":"Paramètres de Pinsk", "Язык ответов Pinsk":"Langue des réponses de Pinsk", "Глубокое рассуждение":"Raisonnement approfondi",
+    "Создать сайт":"Créer un site", "Сгенерировать сайт":"Générer le site", "Генерирую...":"Génération..."
+  },
+  "es-ES": {
+    "＋ Новый чат":"＋ Nuevo chat",
+    "Улучшить тариф ↗":"Mejorar plan ↗",
+    "Перейти на PRO ↗":"Pasar a PRO ↗",
+    "⚙ Админ-панель":"⚙ Panel de administración",
+    "Обзор Pinsk":"Resumen de Pinsk",
+    "Аккаунт":"Cuenta",
+    "Использование":"Uso",
+    "Загрузка...":"Cargando...",
+    "Мои проекты":"Mis proyectos",
+    "Новый проект":"Nuevo proyecto",
+    "Добавить материал":"Añadir material",
+    "Пока нет проектов.":"Todavía no hay proyectos.",
+    "Библиотека пуста.":"La biblioteca está vacía.",
+    "Удалить":"Eliminar",
+    "Создать":"Crear",
+    "Голосовой режим":"Modo de voz",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Habla con naturalidad: Pinsk escucha y responde en voz alta.",
+    "Не подключён":"No conectado",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"Pulsa «Iniciar conversación» y permite el acceso al micrófono.",
+    "Язык разговора":"Idioma de conversación",
+    "Тип голоса":"Tipo de voz",
+    "Молодой / естественный":"Joven / natural",
+    "Мужской":"Masculino",
+    "Женский":"Femenino",
+    "По умолчанию":"Predeterminado",
+    "Начать разговор":"Iniciar conversación",
+    "Остановить":"Detener",
+    "Поиск в интернете":"Búsqueda web",
+    "Что будем искать?":"¿Qué buscamos?",
+    "Найти":"Buscar",
+    "Ищу...":"Buscando...",
+    "Ищем информацию в интернете...":"Buscando información en Internet...",
+    "Краткий ответ":"Respuesta breve",
+    "Источники":"Fuentes",
+    "Анализ данных":"Análisis de datos",
+    "Выбрать файл":"Elegir archivo",
+    "Файл не выбран.":"No se ha seleccionado ningún archivo.",
+    "Что нужно проанализировать?":"¿Qué quieres analizar?",
+    "Проанализировать":"Analizar",
+    "Генератор изображений":"Generador de imágenes",
+    "Предпросмотр":"Vista previa",
+    "Редактор кода":"Editor de código",
+    "Обновить просмотр":"Actualizar vista previa",
+    "Скачать файл":"Descargar archivo",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"El idioma seleccionado se aplica a la interfaz de Pinsk, las sugerencias y las respuestas de IA.",
+    "Голосовой режим":"Modo de voz",
+    "Админ-панель":"Panel de administración",
+    "Голосовой режим":"Modo de voz",
+    "Админ-панель":"Panel de administración",
+    "Генерация изображений":"Generación de imágenes",
+    "Создание сайтов":"Creador de sitios web",
+    "Редактор кода":"Editor de código",
+    "Обновить просмотр":"Actualizar vista previa",
+    "Скачать файл":"Descargar archivo",
+    "Скачать проект (HTML + CSS + JS)":"Descargar proyecto (HTML + CSS + JS)",
+    "Предпросмотр":"Vista previa",
+    "Изолированный режим":"Modo aislado",
+    "До 5000 символов":"Hasta 5000 caracteres",
+    "Какой сайт или интерфейс создать?":"¿Qué sitio o interfaz quieres crear?",
+    "Опиши, какое изображение нужно создать":"Describe la imagen que quieres crear",
+    "Инструменты Pinsk":"Herramientas de Pinsk",
+    "Рабочее пространство":"Espacio de trabajo", "Чат":"Chat", "Анализ данных":"Análisis de datos", "Инструменты Pinsk":"Herramientas de Pinsk", "История":"Historial",
+    "Ваш тариф":"Tu plan", "Попробуйте возможности Pinsk PRO":"Prueba Pinsk PRO", "Улучшить тариф":"Mejorar plan", "Пользователь":"Usuario", "Бесплатный план":"Plan gratuito", "Перейти на PRO":"Pasar a PRO",
+    "Чем могу помочь?":"¿En qué puedo ayudarte?", "Я Pinsk — ваш интеллектуальный помощник.":"Soy Pinsk, tu asistente de IA.", "Написать текст":"Escribir texto", "Письма, статьи и идеи":"Correos, artículos e ideas", "Объяснить тему":"Explicar un tema", "Понятные ответы":"Respuestas claras", "Написать код":"Escribir código", "Программирование":"Programación", "Найти идею":"Encontrar una idea", "Творчество и проекты":"Creatividad y proyectos",
+    "Новый чат":"Nuevo chat", "Чаты":"Chats", "Проекты":"Proyectos", "Библиотека":"Biblioteca",
+    "Обзор":"Resumen", "Плагины":"Complementos", "Настройки":"Configuración", "Профиль":"Perfil",
+    "Выйти":"Cerrar sesión", "Тарифы":"Planes", "Файл":"Archivo", "Глубокое мышление":"Razonamiento profundo",
+    "Создать изображение":"Crear imagen", "Режим изображения":"Modo de imagen", "Спросите что-нибудь у Pinsk...":"Pregunta lo que quieras a Pinsk...",
+    "Спроси что-нибудь...":"Pregunta lo que quieras...", "Опиши изображение, которое нужно создать...":"Describe la imagen que quieres crear...",
+    "Отправить":"Enviar", "Остановить ответ":"Detener respuesta", "Сохранить":"Guardar", "Закрыть":"Cerrar",
+    "Настройки Pinsk":"Configuración de Pinsk", "Язык ответов Pinsk":"Idioma de respuesta de Pinsk", "Глубокое рассуждение":"Razonamiento profundo",
+    "Создать сайт":"Crear sitio web", "Сгенерировать сайт":"Generar sitio web", "Генерирую...":"Generando..."
+  },
+  "it-IT": {
+    "＋ Новый чат":"＋ Nuova chat",
+    "Улучшить тариф ↗":"Migliora piano ↗",
+    "Перейти на PRO ↗":"Passa a PRO ↗",
+    "⚙ Админ-панель":"⚙ Pannello admin",
+    "Обзор Pinsk":"Panoramica Pinsk",
+    "Аккаунт":"Account",
+    "Использование":"Utilizzo",
+    "Загрузка...":"Caricamento...",
+    "Мои проекты":"I miei progetti",
+    "Новый проект":"Nuovo progetto",
+    "Добавить материал":"Aggiungi materiale",
+    "Пока нет проектов.":"Non ci sono ancora progetti.",
+    "Библиотека пуста.":"La libreria è vuota.",
+    "Удалить":"Elimina",
+    "Создать":"Crea",
+    "Голосовой режим":"Modalità vocale",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Parla liberamente: Pinsk ascolta e risponde a voce.",
+    "Не подключён":"Non connesso",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"Premi «Avvia conversazione» e consenti l’accesso al microfono.",
+    "Язык разговора":"Lingua della conversazione",
+    "Тип голоса":"Tipo di voce",
+    "Молодой / естественный":"Giovane / naturale",
+    "Мужской":"Maschile",
+    "Женский":"Femminile",
+    "По умолчанию":"Predefinito",
+    "Начать разговор":"Avvia conversazione",
+    "Остановить":"Interrompi",
+    "Поиск в интернете":"Ricerca sul Web",
+    "Что будем искать?":"Che cosa cerchiamo?",
+    "Найти":"Cerca",
+    "Ищу...":"Ricerca...",
+    "Ищем информацию в интернете...":"Ricerca di informazioni sul Web...",
+    "Краткий ответ":"Risposta breve",
+    "Источники":"Fonti",
+    "Анализ данных":"Analisi dei dati",
+    "Выбрать файл":"Scegli file",
+    "Файл не выбран.":"Nessun file selezionato.",
+    "Что нужно проанализировать?":"Che cosa vuoi analizzare?",
+    "Проанализировать":"Analizza",
+    "Генератор изображений":"Generatore di immagini",
+    "Предпросмотр":"Anteprima",
+    "Редактор кода":"Editor di codice",
+    "Обновить просмотр":"Aggiorna anteprima",
+    "Скачать файл":"Scarica file",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"La lingua selezionata si applica all’interfaccia Pinsk, ai suggerimenti e alle risposte IA.",
+    "Голосовой режим":"Modalità vocale",
+    "Админ-панель":"Pannello admin",
+    "Голосовой режим":"Modalità vocale",
+    "Админ-панель":"Pannello admin",
+    "Генерация изображений":"Generazione immagini",
+    "Создание сайтов":"Creatore di siti web",
+    "Редактор кода":"Editor di codice",
+    "Обновить просмотр":"Aggiorna anteprima",
+    "Скачать файл":"Scarica file",
+    "Скачать проект (HTML + CSS + JS)":"Scarica progetto (HTML + CSS + JS)",
+    "Предпросмотр":"Anteprima",
+    "Изолированный режим":"Modalità isolata",
+    "До 5000 символов":"Fino a 5000 caratteri",
+    "Какой сайт или интерфейс создать?":"Quale sito o interfaccia creare?",
+    "Опиши, какое изображение нужно создать":"Descrivi l’immagine da creare",
+    "Инструменты Pinsk":"Strumenti Pinsk",
+    "Рабочее пространство":"Spazio di lavoro", "Чат":"Chat", "Анализ данных":"Analisi dei dati", "Инструменты Pinsk":"Strumenti Pinsk", "История":"Cronologia",
+    "Ваш тариф":"Il tuo piano", "Попробуйте возможности Pinsk PRO":"Prova Pinsk PRO", "Улучшить тариф":"Migliora piano", "Пользователь":"Utente", "Бесплатный план":"Piano gratuito", "Перейти на PRO":"Passa a PRO",
+    "Чем могу помочь?":"Come posso aiutarti?", "Я Pinsk — ваш интеллектуальный помощник.":"Sono Pinsk, il tuo assistente IA.", "Написать текст":"Scrivi un testo", "Письма, статьи и идеи":"E-mail, articoli e idee", "Объяснить тему":"Spiega un argomento", "Понятные ответы":"Risposte chiare", "Написать код":"Scrivi codice", "Программирование":"Programmazione", "Найти идею":"Trova un’idea", "Творчество и проекты":"Creatività e progetti",
+    "Новый чат":"Nuova chat", "Чаты":"Chat", "Проекты":"Progetti", "Библиотека":"Libreria",
+    "Обзор":"Panoramica", "Плагины":"Plugin", "Настройки":"Impostazioni", "Профиль":"Profilo",
+    "Выйти":"Esci", "Тарифы":"Piani", "Файл":"File", "Глубокое мышление":"Ragionamento approfondito",
+    "Создать изображение":"Crea immagine", "Режим изображения":"Modalità immagine", "Спросите что-нибудь у Pinsk...":"Chiedi qualcosa a Pinsk...",
+    "Спроси что-нибудь...":"Chiedi qualcosa...", "Опиши изображение, которое нужно создать...":"Descrivi l’immagine da creare...",
+    "Отправить":"Invia", "Остановить ответ":"Interrompi risposta", "Сохранить":"Salva", "Закрыть":"Chiudi",
+    "Настройки Pinsk":"Impostazioni Pinsk", "Язык ответов Pinsk":"Lingua delle risposte di Pinsk", "Глубокое рассуждение":"Ragionamento approfondito",
+    "Создать сайт":"Crea sito web", "Сгенерировать сайт":"Genera sito web", "Генерирую...":"Generazione..."
+  },
+  "az-AZ": {
+    "＋ Новый чат":"＋ Yeni söhbət",
+    "Улучшить тариф ↗":"Tarifi yüksəlt ↗",
+    "Перейти на PRO ↗":"PRO-ya keç ↗",
+    "⚙ Админ-панель":"⚙ Admin paneli",
+    "Обзор Pinsk":"Pinsk icmalı",
+    "Аккаунт":"Hesab",
+    "Использование":"İstifadə",
+    "Загрузка...":"Yüklənir...",
+    "Мои проекты":"Layihələrim",
+    "Новый проект":"Yeni layihə",
+    "Добавить материал":"Material əlavə et",
+    "Пока нет проектов.":"Hələ layihə yoxdur.",
+    "Библиотека пуста.":"Kitabxana boşdur.",
+    "Удалить":"Sil",
+    "Создать":"Yarat",
+    "Голосовой режим":"Səs rejimi",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"Danışın — Pinsk sizi dinləyir və səslə cavab verir.",
+    "Не подключён":"Qoşulmayıb",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"«Söhbətə başla» düyməsini basın və mikrofona icazə verin.",
+    "Язык разговора":"Söhbət dili",
+    "Тип голоса":"Səs növü",
+    "Молодой / естественный":"Gənc / təbii",
+    "Мужской":"Kişi",
+    "Женский":"Qadın",
+    "По умолчанию":"Standart",
+    "Начать разговор":"Söhbətə başla",
+    "Остановить":"Dayandır",
+    "Поиск в интернете":"İnternetdə axtarış",
+    "Что будем искать?":"Nə axtaraq?",
+    "Найти":"Axtar",
+    "Ищу...":"Axtarılır...",
+    "Ищем информацию в интернете...":"İnternetdə məlumat axtarılır...",
+    "Краткий ответ":"Qısa cavab",
+    "Источники":"Mənbələr",
+    "Анализ данных":"Məlumatların təhlili",
+    "Выбрать файл":"Fayl seç",
+    "Файл не выбран.":"Fayl seçilməyib.",
+    "Что нужно проанализировать?":"Nə təhlil edilməlidir?",
+    "Проанализировать":"Təhlil et",
+    "Генератор изображений":"Şəkil generatoru",
+    "Предпросмотр":"Önizləmə",
+    "Редактор кода":"Kod redaktoru",
+    "Обновить просмотр":"Önizləməni yenilə",
+    "Скачать файл":"Faylı endir",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"Seçilmiş dil Pinsk interfeysinə, göstərişlərə və süni intellekt cavablarına tətbiq olunur.",
+    "Голосовой режим":"Səs rejimi",
+    "Админ-панель":"Admin paneli",
+    "Голосовой режим":"Səs rejimi",
+    "Админ-панель":"Admin paneli",
+    "Генерация изображений":"Şəkil yaradılması",
+    "Создание сайтов":"Sayt qurucusu",
+    "Редактор кода":"Kod redaktoru",
+    "Обновить просмотр":"Önizləməni yenilə",
+    "Скачать файл":"Faylı endir",
+    "Скачать проект (HTML + CSS + JS)":"Layihəni endir (HTML + CSS + JS)",
+    "Предпросмотр":"Önizləmə",
+    "Изолированный режим":"Təcrid olunmuş rejim",
+    "До 5000 символов":"5000 simvoladək",
+    "Какой сайт или интерфейс создать?":"Hansı saytı və ya interfeysi yaradaq?",
+    "Опиши, какое изображение нужно создать":"Yaradılacaq şəkli təsvir edin",
+    "Инструменты Pinsk":"Pinsk alətləri",
+    "Рабочее пространство":"İş sahəsi", "Чат":"Söhbət", "Анализ данных":"Məlumatların təhlili", "Инструменты Pinsk":"Pinsk alətləri", "История":"Tarixçə",
+    "Ваш тариф":"Tarifiniz", "Попробуйте возможности Pinsk PRO":"Pinsk PRO imkanlarını sınayın", "Улучшить тариф":"Tarifi yüksəlt", "Пользователь":"İstifadəçi", "Бесплатный план":"Pulsuz plan", "Перейти на PRO":"PRO-ya keç",
+    "Чем могу помочь?":"Sizə necə kömək edə bilərəm?", "Я Pinsk — ваш интеллектуальный помощник.":"Mən Pinsk, sizin süni intellekt köməkçinizəm.", "Написать текст":"Mətn yaz", "Письма, статьи и идеи":"Məktublar, məqalələr və ideyalar", "Объяснить тему":"Mövzunu izah et", "Понятные ответы":"Aydın cavablar", "Написать код":"Kod yaz", "Программирование":"Proqramlaşdırma", "Найти идею":"İdeya tap", "Творчество и проекты":"Yaradıcılıq və layihələr",
+    "Новый чат":"Yeni söhbət", "Чаты":"Söhbətlər", "Проекты":"Layihələr", "Библиотека":"Kitabxana",
+    "Обзор":"İcmal", "Плагины":"Plaginlər", "Настройки":"Parametrlər", "Профиль":"Profil",
+    "Выйти":"Çıxış", "Тарифы":"Tariflər", "Файл":"Fayl", "Глубокое мышление":"Dərin düşünmə",
+    "Создать изображение":"Şəkil yarat", "Режим изображения":"Şəkil rejimi", "Спросите что-нибудь у Pinsk...":"Pinsk-dən nəsə soruşun...",
+    "Спроси что-нибудь...":"Nəsə soruşun...", "Опиши изображение, которое нужно создать...":"Yaradılacaq şəkli təsvir edin...",
+    "Отправить":"Göndər", "Остановить ответ":"Cavabı dayandır", "Сохранить":"Yadda saxla", "Закрыть":"Bağla",
+    "Настройки Pinsk":"Pinsk parametrləri", "Язык ответов Pinsk":"Pinsk cavablarının dili", "Глубокое рассуждение":"Dərin mühakimə",
+    "Создать сайт":"Sayt yarat", "Сгенерировать сайт":"Saytı yarat", "Генерирую...":"Yaradılır..."
+  },
+  "zh-CN": {
+    "＋ Новый чат":"＋ 新建聊天",
+    "Улучшить тариф ↗":"升级套餐 ↗",
+    "Перейти на PRO ↗":"升级到 PRO ↗",
+    "⚙ Админ-панель":"⚙ 管理面板",
+    "Обзор Pinsk":"Pinsk 概览",
+    "Аккаунт":"账户",
+    "Использование":"使用情况",
+    "Загрузка...":"正在加载...",
+    "Мои проекты":"我的项目",
+    "Новый проект":"新建项目",
+    "Добавить материал":"添加资料",
+    "Пока нет проектов.":"暂时没有项目。",
+    "Библиотека пуста.":"资料库为空。",
+    "Удалить":"删除",
+    "Создать":"创建",
+    "Голосовой режим":"语音模式",
+    "Просто говори — Pinsk слушает и отвечает живым голосом.":"直接说话，Pinsk 会聆听并用语音回答。",
+    "Не подключён":"未连接",
+    "Нажми «Начать разговор» и разреши доступ к микрофону.":"点击“开始对话”并允许访问麦克风。",
+    "Язык разговора":"对话语言",
+    "Тип голоса":"语音类型",
+    "Молодой / естественный":"年轻 / 自然",
+    "Мужской":"男声",
+    "Женский":"女声",
+    "По умолчанию":"默认",
+    "Начать разговор":"开始对话",
+    "Остановить":"停止",
+    "Поиск в интернете":"网络搜索",
+    "Что будем искать?":"要搜索什么？",
+    "Найти":"搜索",
+    "Ищу...":"正在搜索...",
+    "Ищем информацию в интернете...":"正在网上查找信息...",
+    "Краткий ответ":"简要回答",
+    "Источники":"来源",
+    "Анализ данных":"数据分析",
+    "Выбрать файл":"选择文件",
+    "Файл не выбран.":"未选择文件。",
+    "Что нужно проанализировать?":"需要分析什么？",
+    "Проанализировать":"分析",
+    "Генератор изображений":"图片生成器",
+    "Предпросмотр":"预览",
+    "Редактор кода":"代码编辑器",
+    "Обновить просмотр":"刷新预览",
+    "Скачать файл":"下载文件",
+    "Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.":"所选语言将应用于 Pinsk 界面、提示和 AI 回复。",
+    "Голосовой режим":"语音模式",
+    "Админ-панель":"管理面板",
+    "Голосовой режим":"语音模式",
+    "Админ-панель":"管理面板",
+    "Генерация изображений":"图片生成",
+    "Создание сайтов":"网站构建器",
+    "Редактор кода":"代码编辑器",
+    "Обновить просмотр":"刷新预览",
+    "Скачать файл":"下载文件",
+    "Скачать проект (HTML + CSS + JS)":"下载项目（HTML + CSS + JS）",
+    "Предпросмотр":"预览",
+    "Изолированный режим":"隔离模式",
+    "До 5000 символов":"最多 5000 个字符",
+    "Какой сайт или интерфейс создать?":"要创建什么网站或界面？",
+    "Опиши, какое изображение нужно создать":"描述要创建的图片",
+    "Инструменты Pinsk":"Pinsk 工具",
+    "Рабочее пространство":"工作区", "Чат":"聊天", "Анализ данных":"数据分析", "Инструменты Pinsk":"Pinsk 工具", "История":"历史记录",
+    "Ваш тариф":"当前套餐", "Попробуйте возможности Pinsk PRO":"体验 Pinsk PRO", "Улучшить тариф":"升级套餐", "Пользователь":"用户", "Бесплатный план":"免费套餐", "Перейти на PRO":"升级到 PRO",
+    "Чем могу помочь?":"我能帮你什么？", "Я Pinsk — ваш интеллектуальный помощник.":"我是 Pinsk，你的智能助手。", "Написать текст":"撰写文本", "Письма, статьи и идеи":"邮件、文章和创意", "Объяснить тему":"解释主题", "Понятные ответы":"清晰易懂的回答", "Написать код":"编写代码", "Программирование":"编程", "Найти идею":"寻找灵感", "Творчество и проекты":"创意与项目",
+    "Новый чат":"新建聊天", "Чаты":"聊天", "Проекты":"项目", "Библиотека":"资料库",
+    "Обзор":"概览", "Плагины":"插件", "Настройки":"设置", "Профиль":"个人资料",
+    "Выйти":"退出", "Тарифы":"套餐", "Файл":"文件", "Глубокое мышление":"深度思考",
+    "Создать изображение":"创建图片", "Режим изображения":"图片模式", "Спросите что-нибудь у Pinsk...":"向 Pinsk 提问...",
+    "Спроси что-нибудь...":"随便问点什么...", "Опиши изображение, которое нужно создать...":"描述要创建的图片...",
+    "Отправить":"发送", "Остановить ответ":"停止回答", "Сохранить":"保存", "Закрыть":"关闭",
+    "Настройки Pinsk":"Pinsk 设置", "Язык ответов Pinsk":"Pinsk 回复语言", "Глубокое рассуждение":"深度推理",
+    "Создать сайт":"创建网站", "Сгенерировать сайт":"生成网站", "Генерирую...":"正在生成..."
+  }
+};
+
+const originalUiTextNodes = new WeakMap();
+
+function applyLanguage(root = document.body) {
+  const dictionary = UI_TRANSLATIONS[language] || {};
+  document.documentElement.lang = language;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(node => {
+    const parent = node.parentElement;
+    if (!parent || parent.closest(".message, .message-content, pre, code, textarea, input, script, style")) return;
+    if (!originalUiTextNodes.has(node)) originalUiTextNodes.set(node, node.nodeValue);
+    const sourceText = originalUiTextNodes.get(node);
+    const original = sourceText.trim();
+    if (!original) return;
+    const translated = dictionary[original] || original;
+    node.nodeValue = sourceText.replace(original, translated);
+  });
+  root.querySelectorAll("[placeholder]").forEach(el => {
+    const original = el.dataset.originalPlaceholder || el.getAttribute("placeholder");
+    if (!el.dataset.originalPlaceholder) el.dataset.originalPlaceholder = original;
+    el.setAttribute("placeholder", dictionary[original] || original);
+  });
+  root.querySelectorAll("[title], [aria-label]").forEach(el => {
+    ["title", "aria-label"].forEach(attr => {
+      const originalKey = "original" + attr.replace(/^[a-z]/, c => c.toUpperCase());
+      const original = el.dataset[originalKey] || el.getAttribute(attr);
+      if (!el.dataset[originalKey]) el.dataset[originalKey] = original;
+      el.setAttribute(attr, dictionary[original] || original);
+    });
+  });
+  const imageButton = $("imageModeButton");
+  if (imageButton) {
+    const active = imageMode;
+    imageButton.textContent = active
+      ? "✕ " + (dictionary["Режим изображения"] || "Режим изображения")
+      : "🎨 " + (dictionary["Создать изображение"] || "Создать изображение");
+  }
+}
+
+/* =========================================
    НАСТРОЙКИ
    ========================================= */
 
@@ -3069,7 +3701,7 @@ function showSettings() {
     <select id="languageSelect">
       ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
-    <p class="settings-hint">Выбранный язык используется в чате, голосовом режиме, генерации сайтов и подсказках для изображений. Язык элементов интерфейса пока остаётся русским.</p>
+    <p class="settings-hint">Выбранный язык применяется к интерфейсу Pinsk, подсказкам и ответам ИИ.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3080,9 +3712,18 @@ function showSettings() {
     <button class="primary-button" id="saveSettings">Сохранить</button>
   `);
 
+  $("languageSelect").addEventListener("change", () => {
+    language = $("languageSelect").value;
+    voiceLanguage = language;
+    localStorage.setItem(STORAGE.language, language);
+    localStorage.setItem("pinsk_voice_language", voiceLanguage);
+    applyLanguage();
+  });
+
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
     localStorage.setItem(STORAGE.language, language);
+    applyLanguage();
     voiceLanguage = language;
     localStorage.setItem("pinsk_voice_language", voiceLanguage);
 
@@ -3092,7 +3733,8 @@ function showSettings() {
     );
 
     closeModal();
-    toast("Настройки сохранены.");
+    applyLanguage();
+    toast(language === "kk-KZ" ? "Баптаулар сақталды." : language === "en-GB" ? "Settings saved." : "Настройки сохранены.");
   };
 }
 
@@ -3872,25 +4514,32 @@ function installPinskUiFixes() {
 
     /* Кнопка генерации */
     .pinsk-image-mode {
-      min-height: 40px;
-      padding: 8px 12px;
+      min-height: 34px;
+      padding: 7px 12px;
       flex: 0 0 auto;
-      border: 1px solid #514875;
-      border-radius: 11px;
-      color: #ded8ff;
-      background: #292638;
+      border: 1px solid #ffffff1c;
+      border-radius: 999px;
+      color: #c2c1cc;
+      background: transparent;
       cursor: pointer;
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       transition: .2s;
     }
 
     .pinsk-image-mode:hover,
     .pinsk-image-mode.active {
-      background: #51418c;
-      border-color: #9c89ff;
-      color: #fff;
+      background: #8b78ff18;
+      border-color: #7567b5;
+      color: #d0c6ff;
     }
+
+    .stop-generation-button {
+      background: #b34b58;
+      font-size: 15px;
+    }
+    .stop-generation-button:hover { background: #d05b69; }
+    .stop-generation-button[hidden], .send-button[hidden] { display: none !important; }
 
     /* Предпросмотр вложений */
     #selectedFiles {
@@ -4051,8 +4700,8 @@ function installPinskUiFixes() {
       }
 
       .pinsk-image-mode {
-        min-height: 38px;
-        padding: 7px 9px;
+        min-height: 32px;
+        padding: 6px 10px;
         font-size: 11px;
       }
 
@@ -4139,6 +4788,14 @@ async function init() {
   initEvents();
   installVoiceButton();
   installImageModeButton();
+  installStopGenerationButton();
+  applyLanguage();
+  const languageObserver = new MutationObserver(records => {
+    for (const record of records) {
+      if (record.addedNodes.length) applyLanguage(record.target.nodeType === 1 ? record.target : record.target.parentElement || document.body);
+    }
+  });
+  languageObserver.observe(document.body, { childList: true, subtree: true });
   renderAttachmentPreview();
   updateProfile();
 
