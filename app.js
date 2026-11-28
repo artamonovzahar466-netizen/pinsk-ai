@@ -1,11 +1,5 @@
 
 
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -1300,7 +1294,7 @@ function updateScrollToBottomButton() {
   if (composerArea) {
     const composerRect = composerArea.getBoundingClientRect();
     // Центрируем стрелку точно над полем ввода, а не относительно всего окна.
-    button.style.left = `${composerRect.left + composerRect.width / 2 + 14}px`;
+    button.style.left = `${composerRect.left + composerRect.width / 2}px`;
     const composerTop = composerRect.top;
     button.style.bottom = `${Math.max(12, window.innerHeight - composerTop + 8)}px`;
   }
