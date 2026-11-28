@@ -1210,40 +1210,25 @@ button {
 .composer textarea { min-height: 64px; max-height: 260px; }
 
 
-/* CHAT + COMPOSER: убираем верхнюю чёрную линию, не меняя само поле ввода. */
+/* CHAT + COMPOSER: скрываем край прокручиваемой переписки за нижней панелью.
+   Фон footer должен быть непрозрачным, чтобы содержимое сообщений не просвечивало
+   в верхнем отступе и не выглядело как чёрная разделительная полоска. */
 .main:has(.workspace) .workspace {
-  max-width: 1280px;
   padding-bottom: 0;
   border-bottom: 0 !important;
   box-shadow: none !important;
 }
 .main:has(.composer-area) .composer-area {
+  position: relative;
+  z-index: 5;
   border: 0 !important;
   border-top: 0 !important;
-  outline: 0 !important;
   box-shadow: none !important;
-  background: transparent !important;
-  margin-top: -1px;
+  background: var(--bg) !important;
+  margin-top: 0;
   padding-top: 6px;
 }
-.main:has(.composer-area) .composer-area::before,
-.main:has(.composer-area) .composer-area::after {
+.main:has(.composer-area) .composer-area::before {
   content: none !important;
   display: none !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}
-/* Расширяем именно область сообщений; ширина поля ввода остаётся прежней. */
-.main:has(.messages) .messages {
-  width: 100%;
-}
-.main:has(.messages) .assistant-message .message-content {
-  max-width: 96%;
-}
-@media (min-width: 900px) {
-  .main:has(.messages) .workspace {
-    max-width: 1280px;
-    padding-left: 36px;
-    padding-right: 36px;
-  }
 }
