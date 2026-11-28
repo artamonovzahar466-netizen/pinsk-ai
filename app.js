@@ -1671,11 +1671,37 @@ function installImageModeButton() {
   });
 
   const attachButton = $("attachButton");
+  const reasoningButton = $("reasoningButton");
+  const voiceButton = $("voiceButton");
+  const controlsParent = reasoningButton?.parentElement || attachButton?.parentElement || form;
 
-  if (attachButton && attachButton.parentElement === form) {
-    form.insertBefore(button, attachButton);
+  // Две ровные строки: вложения + глубокое мышление; голос + изображение.
+  // Режим изображения находится непосредственно под глубоким мышлением.
+  if (controlsParent) {
+    let layout = controlsParent.querySelector(":scope > .composer-control-layout");
+    if (!layout) {
+      layout = document.createElement("div");
+      layout.className = "composer-control-layout";
+
+      const firstRow = document.createElement("div");
+      firstRow.className = "composer-control-row composer-control-row-top";
+      firstRow.setAttribute("aria-label", "Основные инструменты");
+
+      const secondRow = document.createElement("div");
+      secondRow.className = "composer-control-row composer-control-row-bottom";
+      secondRow.setAttribute("aria-label", "Режимы изображения и голоса");
+
+      layout.append(firstRow, secondRow);
+      controlsParent.insertBefore(layout, controlsParent.firstChild);
+
+      if (attachButton) firstRow.appendChild(attachButton);
+      if (reasoningButton) firstRow.appendChild(reasoningButton);
+      if (voiceButton) secondRow.appendChild(voiceButton);
+      secondRow.appendChild(button);
+    }
   } else {
     form.appendChild(button);
+    if (voiceButton) button.insertAdjacentElement("beforebegin", voiceButton);
   }
 }
 
@@ -3175,9 +3201,9 @@ function installVoiceButton() {
   button.type = "button";
   button.id = "voiceButton";
   button.className = "voice-inline-button";
-  button.title = "Голосовой ввод";
-  button.setAttribute("aria-label", "Голосовой ввод");
-  button.textContent = "🎙";
+  button.title = "Голосовой режим";
+  button.setAttribute("aria-label", "Голосовой режим");
+  button.textContent = "🎙 Голосовой режим";
 
   button.addEventListener("click", () => {
     if (recognition) stopInlineVoice();
@@ -3522,10 +3548,11 @@ function installPinskUiFixes() {
     .pinsk-scroll-bottom {
       position: fixed;
       z-index: 1200;
-      right: max(28px, calc((100vw - 930px) / 2 + 28px));
-      bottom: 112px;
-      width: 44px;
-      height: 44px;
+      left: 50%;
+      right: auto;
+      bottom: 124px;
+      width: 40px;
+      height: 40px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -3538,7 +3565,7 @@ function installPinskUiFixes() {
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
-      transform: translateY(8px);
+      transform: translate(-50%, 8px);
       transition: opacity .18s ease, transform .18s ease, visibility .18s ease, background .18s ease;
       backdrop-filter: blur(10px);
     }
@@ -3547,7 +3574,7 @@ function installPinskUiFixes() {
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      transform: translateY(0);
+      transform: translate(-50%, 0);
     }
 
     .pinsk-scroll-bottom:hover {
@@ -4007,6 +4034,70 @@ function installPinskUiFixes() {
       display: none !important;
     }
 
+    /* Две компактные строки инструментов: режимы имеют одинаковый размер. */
+    .composer-control-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 7px;
+      width: min(100%, 420px);
+      min-width: 0;
+      margin: 0 auto;
+    }
+
+    .composer-control-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .composer-control-row > * {
+      width: 100%;
+      min-width: 0;
+      min-height: 36px;
+      height: 36px;
+      margin: 0;
+      justify-content: center;
+      white-space: nowrap;
+      font-size: 12px;
+      padding: 6px 9px;
+      box-sizing: border-box;
+    }
+
+    .composer-control-row .tool-button,
+    .composer-control-row .pinsk-image-mode,
+    .composer-control-row .voice-inline-button {
+      width: 100%;
+      min-height: 36px;
+      height: 36px;
+      box-sizing: border-box;
+    }
+
+    .composer-control-row .voice-inline-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 8px 12px;
+      border: 1px solid #514875;
+      border-radius: 11px;
+      color: #ded8ff;
+      background: #292638;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      transition: .2s;
+    }
+
+    .composer-control-row .voice-inline-button:hover,
+    .composer-control-row .voice-inline-button.recording {
+      background: #51418c;
+      border-color: #9c89ff;
+      color: #fff;
+    }
+
     /* Кнопка генерации */
     .pinsk-image-mode {
       min-height: 40px;
@@ -4215,10 +4306,11 @@ function installPinskUiFixes() {
       }
 
       .pinsk-scroll-bottom {
-        right: 18px;
-        bottom: 92px;
-        width: 42px;
-        height: 42px;
+        left: 50%;
+        right: auto;
+        bottom: 108px;
+        width: 38px;
+        height: 38px;
       }
 
       .voice-inline-button {
@@ -4275,6 +4367,7 @@ async function init() {
   installStudioNavigation();
 
   initEvents();
+  installVoiceButton();
   installImageModeButton();
   renderAttachmentPreview();
   updateProfile();
