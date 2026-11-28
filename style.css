@@ -337,7 +337,7 @@ button {
 
 .workspace {
   width: 100%;
-  max-width: 930px;
+  max-width: 1120px;
   flex: 1;
   min-height: 0;
   margin: 0 auto;
@@ -491,7 +491,7 @@ button {
 
 .message-content {
   min-width: 0;
-  max-width: 82%;
+  max-width: 90%;
   padding: 12px 16px;
   border-radius: 15px;
   overflow-wrap: anywhere;
@@ -639,7 +639,7 @@ button {
 
 .composer-area {
   width: 100%;
-  max-width: 920px;
+  max-width: 840px;
   margin: 0 auto;
   padding: 12px 25px 20px;
 }
@@ -664,8 +664,8 @@ button {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 82px;
-  max-height: 320px;
+  min-height: 64px;
+  max-height: 260px;
   resize: vertical;
   overflow-y: auto;
   background: transparent;
@@ -756,7 +756,7 @@ button {
 @media (max-width: 600px) {
   .composer-area { padding: 9px 10px 13px; }
   .composer { border-radius: 21px; padding: 12px 12px 10px; }
-  .composer textarea { min-height: 72px; max-height: 280px; font-size: 14px; resize: vertical; }
+  .composer textarea { min-height: 60px; max-height: 240px; font-size: 14px; resize: vertical; }
   .composer-tools { gap: 8px; }
   .composer-left { gap: 6px; }
   .tool-button { min-height: 32px; padding: 6px 10px; font-size: 11px; }
@@ -1200,3 +1200,11 @@ button {
 }
 .stop-generation-button:hover { background: #a092ff; transform: translateY(-1px); }
 .stop-generation-button[hidden] { display: none !important; }
+
+
+/* Просторнее область диалога и более компактное поле ввода. */
+@media (min-width: 900px) {
+  .workspace { max-width: 1120px; }
+  .composer-area { max-width: 860px; }
+}
+.composer textarea { min-height: 64px; max-height: 260px; }
