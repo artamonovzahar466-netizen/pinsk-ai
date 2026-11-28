@@ -48,6 +48,70 @@ const APP_LANGUAGES = {
   "zh-CN": "中文（简体）"
 };
 const APP_LANGUAGE_CODES = Object.keys(APP_LANGUAGES);
+
+// Перевод интерфейса отдельно от ответов ассистента и пользовательских сообщений.
+const UI_TRANSLATIONS = {
+  "kk-KZ": {
+    "＋ Новый чат":"＋ Жаңа чат", "Рабочее пространство":"Жұмыс кеңістігі", "Чат":"Чат", "Обзор":"Шолу", "Проекты":"Жобалар", "Библиотека":"Кітапхана", "Плагины":"Плагиндер", "Анализ данных":"Деректерді талдау", "Студия дизайна":"Дизайн студиясы", "История":"Тарих", "Ваш тариф":"Сіздің тарифіңіз", "Попробуйте возможности Pinsk PRO":"Pinsk PRO мүмкіндіктерін қолданып көріңіз", "Улучшить тариф ↗":"Тарифті жаңарту ↗", "Пользователь":"Пайдаланушы", "Бесплатный план":"Тегін жоспар", "Настройки":"Баптаулар", "Перейти на PRO ↗":"PRO нұсқасына өту ↗", "Чем могу помочь?":"Қалай көмектесе аламын?", "Я Pinsk — ваш интеллектуальный помощник.":"Мен Pinsk — сіздің ақылды көмекшіңізбін.", "Написать текст":"Мәтін жазу", "Письма, статьи и идеи":"Хаттар, мақалалар және идеялар", "Объяснить тему":"Тақырыпты түсіндіру", "Понятные ответы":"Түсінікті жауаптар", "Написать код":"Код жазу", "Программирование":"Бағдарламалау", "Найти идею":"Идея табу", "Творчество и проекты":"Шығармашылық және жобалар", "＋ Файл":"＋ Файл", "Файл":"Файл", "Глубокое мышление":"Терең ойлау", "Отправить":"Жіберу", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk қателесуі мүмкін. Маңызды ақпаратты тексеріңіз.", "Спросите что-нибудь у Pinsk...":"Pinsk-тен бірдеңе сұраңыз...", "Спросите что-нибудь...":"Бірдеңе сұраңыз...", "Создать изображение":"Сурет жасау", "Язык ответов Pinsk":"Pinsk жауаптарының тілі", "Сохранить":"Сақтау", "Настройки Pinsk":"Pinsk баптаулары"
+  },
+  "en-GB": {
+    "＋ Новый чат":"＋ New chat", "Рабочее пространство":"Workspace", "Чат":"Chat", "Обзор":"Overview", "Проекты":"Projects", "Библиотека":"Library", "Плагины":"Plugins", "Анализ данных":"Data analysis", "Студия дизайна":"Design Studio", "История":"History", "Ваш тариф":"Your plan", "Попробуйте возможности Pinsk PRO":"Try Pinsk PRO features", "Улучшить тариф ↗":"Upgrade plan ↗", "Пользователь":"User", "Бесплатный план":"Free plan", "Настройки":"Settings", "Перейти на PRO ↗":"Upgrade to PRO ↗", "Чем могу помочь?":"How can I help?", "Я Pinsk — ваш интеллектуальный помощник.":"I'm Pinsk — your intelligent assistant.", "Написать текст":"Write text", "Письма, статьи и идеи":"Emails, articles and ideas", "Объяснить тему":"Explain a topic", "Понятные ответы":"Clear answers", "Написать код":"Write code", "Программирование":"Programming", "Найти идею":"Find an idea", "Творчество и проекты":"Creativity and projects", "＋ Файл":"＋ File", "Файл":"File", "Глубокое мышление":"Deep thinking", "Отправить":"Send", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk can make mistakes. Check important information.", "Спросите что-нибудь у Pinsk...":"Ask Pinsk anything...", "Спросите что-нибудь...":"Ask anything...", "Создать изображение":"Create image", "Язык ответов Pinsk":"Pinsk response language", "Сохранить":"Save", "Настройки Pinsk":"Pinsk settings"
+  },
+  "fr-FR": {
+    "＋ Новый чат":"＋ Nouvelle discussion", "Рабочее пространство":"Espace de travail", "Чат":"Discussion", "Обзор":"Vue d’ensemble", "Проекты":"Projets", "Библиотека":"Bibliothèque", "Плагины":"Extensions", "Анализ данных":"Analyse des données", "Студия дизайна":"Studio de design", "История":"Historique", "Ваш тариф":"Votre offre", "Попробуйте возможности Pinsk PRO":"Découvrez Pinsk PRO", "Улучшить тариф ↗":"Passer à une offre supérieure ↗", "Пользователь":"Utilisateur", "Бесплатный план":"Offre gratuite", "Настройки":"Paramètres", "Перейти на PRO ↗":"Passer à PRO ↗", "Чем могу помочь?":"Comment puis-je vous aider ?", "Я Pinsk — ваш интеллектуальный помощник.":"Je suis Pinsk, votre assistant intelligent.", "Написать текст":"Rédiger un texte", "Письма, статьи и идеи":"E-mails, articles et idées", "Объяснить тему":"Expliquer un sujet", "Понятные ответы":"Des réponses claires", "Написать код":"Écrire du code", "Программирование":"Programmation", "Найти идею":"Trouver une idée", "Творчество и проекты":"Créativité et projets", "＋ Файл":"＋ Fichier", "Файл":"Fichier", "Глубокое мышление":"Réflexion approfondie", "Отправить":"Envoyer", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk peut faire des erreurs. Vérifiez les informations importantes.", "Спросите что-нибудь у Pinsk...":"Posez une question à Pinsk...", "Спросите что-нибудь...":"Posez une question...", "Создать изображение":"Créer une image", "Язык ответов Pinsk":"Langue des réponses de Pinsk", "Сохранить":"Enregistrer", "Настройки Pinsk":"Paramètres de Pinsk"
+  },
+  "es-ES": {
+    "＋ Новый чат":"＋ Nuevo chat", "Рабочее пространство":"Espacio de trabajo", "Чат":"Chat", "Обзор":"Resumen", "Проекты":"Proyectos", "Библиотека":"Biblioteca", "Плагины":"Complementos", "Анализ данных":"Análisis de datos", "Студия дизайна":"Estudio de diseño", "История":"Historial", "Ваш тариф":"Tu plan", "Попробуйте возможности Pinsk PRO":"Prueba las funciones de Pinsk PRO", "Улучшить тариф ↗":"Mejorar plan ↗", "Пользователь":"Usuario", "Бесплатный план":"Plan gratuito", "Настройки":"Ajustes", "Перейти на PRO ↗":"Pasar a PRO ↗", "Чем могу помочь?":"¿En qué puedo ayudarte?", "Я Pinsk — ваш интеллектуальный помощник.":"Soy Pinsk, tu asistente inteligente.", "Написать текст":"Escribir texto", "Письма, статьи и идеи":"Correos, artículos e ideas", "Объяснить тему":"Explicar un tema", "Понятные ответы":"Respuestas claras", "Написать код":"Escribir código", "Программирование":"Programación", "Найти идею":"Encontrar una idea", "Творчество и проекты":"Creatividad y proyectos", "＋ Файл":"＋ Archivo", "Файл":"Archivo", "Глубокое мышление":"Razonamiento profundo", "Отправить":"Enviar", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk puede cometer errores. Comprueba la información importante.", "Спросите что-нибудь у Pinsk...":"Pregúntale algo a Pinsk...", "Спросите что-нибудь...":"Pregunta lo que quieras...", "Создать изображение":"Crear imagen", "Язык ответов Pinsk":"Idioma de las respuestas de Pinsk", "Сохранить":"Guardar", "Настройки Pinsk":"Ajustes de Pinsk"
+  },
+  "it-IT": {
+    "＋ Новый чат":"＋ Nuova chat", "Рабочее пространство":"Area di lavoro", "Чат":"Chat", "Обзор":"Panoramica", "Проекты":"Progetti", "Библиотека":"Libreria", "Плагины":"Plugin", "Анализ данных":"Analisi dei dati", "Студия дизайна":"Studio di design", "История":"Cronologia", "Ваш тариф":"Il tuo piano", "Попробуйте возможности Pinsk PRO":"Prova le funzioni di Pinsk PRO", "Улучшить тариф ↗":"Migliora il piano ↗", "Пользователь":"Utente", "Бесплатный план":"Piano gratuito", "Настройки":"Impostazioni", "Перейти на PRO ↗":"Passa a PRO ↗", "Чем могу помочь?":"Come posso aiutarti?", "Я Pinsk — ваш интеллектуальный помощник.":"Sono Pinsk, il tuo assistente intelligente.", "Написать текст":"Scrivi un testo", "Письма, статьи и идеи":"Email, articoli e idee", "Объяснить тему":"Spiega un argomento", "Понятные ответы":"Risposte chiare", "Написать код":"Scrivi codice", "Программирование":"Programmazione", "Найти идею":"Trova un’idea", "Творчество и проекты":"Creatività e progetti", "＋ Файл":"＋ File", "Файл":"File", "Глубокое мышление":"Ragionamento approfondito", "Отправить":"Invia", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk può commettere errori. Verifica le informazioni importanti.", "Спросите что-нибудь у Pinsk...":"Chiedi qualcosa a Pinsk...", "Спросите что-нибудь...":"Chiedi qualcosa...", "Создать изображение":"Crea immagine", "Язык ответов Pinsk":"Lingua delle risposte di Pinsk", "Сохранить":"Salva", "Настройки Pinsk":"Impostazioni di Pinsk"
+  },
+  "az-AZ": {
+    "＋ Новый чат":"＋ Yeni söhbət", "Рабочее пространство":"İş sahəsi", "Чат":"Söhbət", "Обзор":"İcmal", "Проекты":"Layihələr", "Библиотека":"Kitabxana", "Плагины":"Plaginlər", "Анализ данных":"Məlumatların təhlili", "Студия дизайна":"Dizayn studiyası", "История":"Tarixçə", "Ваш тариф":"Tarifiniz", "Попробуйте возможности Pinsk PRO":"Pinsk PRO imkanlarını sınayın", "Улучшить тариф ↗":"Tarifi yüksəlt ↗", "Пользователь":"İstifadəçi", "Бесплатный план":"Pulsuz plan", "Настройки":"Parametrlər", "Перейти на PRO ↗":"PRO-ya keç ↗", "Чем могу помочь?":"Sizə necə kömək edə bilərəm?", "Я Pinsk — ваш интеллектуальный помощник.":"Mən Pinsk — ağıllı köməkçinizəm.", "Написать текст":"Mətn yaz", "Письма, статьи и идеи":"Məktublar, məqalələr və ideyalar", "Объяснить тему":"Mövzunu izah et", "Понятные ответы":"Aydın cavablar", "Написать код":"Kod yaz", "Программирование":"Proqramlaşdırma", "Найти идею":"İdeya tap", "Творчество и проекты":"Yaradıcılıq və layihələr", "＋ Файл":"＋ Fayl", "Файл":"Fayl", "Глубокое мышление":"Dərin düşünmə", "Отправить":"Göndər", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk səhv edə bilər. Vacib məlumatları yoxlayın.", "Спросите что-нибудь у Pinsk...":"Pinsk-dən nəsə soruşun...", "Спросите что-нибудь...":"Nəsə soruşun...", "Создать изображение":"Şəkil yarat", "Язык ответов Pinsk":"Pinsk cavablarının dili", "Сохранить":"Yadda saxla", "Настройки Pinsk":"Pinsk parametrləri"
+  },
+  "zh-CN": {
+    "＋ Новый чат":"＋ 新建聊天", "Рабочее пространство":"工作区", "Чат":"聊天", "Обзор":"概览", "Проекты":"项目", "Библиотека":"资料库", "Плагины":"插件", "Анализ данных":"数据分析", "Студия дизайна":"设计工作室", "История":"历史记录", "Ваш тариф":"您的套餐", "Попробуйте возможности Pinsk PRO":"体验 Pinsk PRO 功能", "Улучшить тариф ↗":"升级套餐 ↗", "Пользователь":"用户", "Бесплатный план":"免费套餐", "Настройки":"设置", "Перейти на PRO ↗":"升级到 PRO ↗", "Чем могу помочь?":"我能帮您什么？", "Я Pinsk — ваш интеллектуальный помощник.":"我是 Pinsk，您的智能助手。", "Написать текст":"撰写文本", "Письма, статьи и идеи":"邮件、文章和创意", "Объяснить тему":"解释主题", "Понятные ответы":"清晰的回答", "Написать код":"编写代码", "Программирование":"编程", "Найти идею":"寻找灵感", "Творчество и проекты":"创意与项目", "＋ Файл":"＋ 文件", "Файл":"文件", "Глубокое мышление":"深度思考", "Отправить":"发送", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk 可能会出错。请核实重要信息。", "Спросите что-нибудь у Pinsk...":"向 Pinsk 提问...", "Спросите что-нибудь...":"请输入问题...", "Создать изображение":"创建图像", "Язык ответов Pinsk":"Pinsk 回复语言", "Сохранить":"保存", "Настройки Pinsk":"Pinsk 设置"
+  }
+};
+
+const originalUiTextNodes = new WeakMap();
+const originalUiAttributes = new WeakMap();
+function applyInterfaceLanguage() {
+  const dictionary = UI_TRANSLATIONS[language] || {};
+  document.documentElement.lang = language;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.parentElement?.closest("#messages, textarea, input, script, style, code, pre")) continue;
+    if (!originalUiTextNodes.has(node)) originalUiTextNodes.set(node, node.nodeValue);
+    const original = originalUiTextNodes.get(node);
+    const trimmed = original.trim();
+    if (!trimmed) continue;
+    const translated = dictionary[trimmed] || trimmed;
+    const nextValue = original.replace(trimmed, translated);
+    if (node.nodeValue !== nextValue) node.nodeValue = nextValue;
+  }
+  document.querySelectorAll("[placeholder], [title], [aria-label]").forEach(element => {
+    let saved = originalUiAttributes.get(element);
+    if (!saved) { saved = {}; originalUiAttributes.set(element, saved); }
+    for (const attribute of ["placeholder", "title", "aria-label"]) {
+      const value = element.getAttribute(attribute);
+      if (value && saved[attribute] === undefined) saved[attribute] = value;
+      const original = saved[attribute];
+      if (original !== undefined) {
+        const translated = dictionary[original] || original;
+        if (value !== translated) element.setAttribute(attribute, translated);
+      }
+    }
+  });
+}
+let interfaceTranslationObserver = null;
+function installInterfaceTranslations() {
+  applyInterfaceLanguage();
+  if (interfaceTranslationObserver || !document.body) return;
+  interfaceTranslationObserver = new MutationObserver(() => applyInterfaceLanguage());
+  interfaceTranslationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+}
 let language = localStorage.getItem(STORAGE.language) || "ru-RU";
 if (language === "ru") language = "ru-RU";
 if (language === "en") language = "en-GB";
@@ -3144,7 +3208,7 @@ function showSettings() {
     <select id="languageSelect">
       ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
-    <p class="settings-hint">Выбранный язык используется в чате, голосовом режиме, генерации сайтов и подсказках для изображений. Язык элементов интерфейса пока остаётся русским.</p>
+    <p class="settings-hint">Язык применяется к ответам и элементам интерфейса Pinsk AI.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3160,6 +3224,7 @@ function showSettings() {
     localStorage.setItem(STORAGE.language, language);
     voiceLanguage = language;
     localStorage.setItem("pinsk_voice_language", voiceLanguage);
+    applyInterfaceLanguage();
 
     localStorage.setItem(
       STORAGE.reasoning,
@@ -3179,6 +3244,17 @@ function initEvents() {
   $("chatForm")?.addEventListener("submit", event => {
     event.preventDefault();
     sendMessage($("prompt")?.value || "");
+  });
+
+  $("prompt")?.addEventListener("paste", event => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const images = items
+      .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+    if (!images.length) return;
+    addSelectedFiles(images);
+    toast(images.length === 1 ? "Скриншот добавлен к сообщению." : "Изображения добавлены к сообщению.");
   });
 
   $("prompt")?.addEventListener("keydown", event => {
@@ -4242,6 +4318,7 @@ async function init() {
   console.log("Pinsk AI: запуск...");
 
   installPinskUiFixes();
+  installInterfaceTranslations();
 
   // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
@@ -4283,4 +4360,3 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
-
