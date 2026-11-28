@@ -1,5 +1,12 @@
 
 
+
+
+
+
+
+
+
 :root {
   --bg: #101014;
   --sidebar: #17171d;
@@ -1208,3 +1215,20 @@ button {
   .composer-area { max-width: 860px; }
 }
 .composer textarea { min-height: 64px; max-height: 260px; }
+
+
+/* CHAT + COMPOSER: единая визуальная область без разделительной полосы. */
+.main:has(.workspace) .workspace {
+  padding-bottom: 0;
+}
+.main:has(.composer-area) .composer-area {
+  border-top: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  margin-top: 0;
+  padding-top: 6px;
+}
+.main:has(.composer-area) .composer-area::before {
+  content: none !important;
+  display: none !important;
+}
