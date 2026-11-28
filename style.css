@@ -1,21 +1,6 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 :root {
   --bg: #101014;
   --sidebar: #17171d;
@@ -651,132 +636,94 @@ button {
   font-style: italic;
 }
 
-/* COMPOSER — rounded ChatGPT-style input */
+/* COMPOSER */
 
 .composer-area {
   width: 100%;
-  max-width: 920px;
+  max-width: 850px;
   margin: 0 auto;
-  padding: 12px 25px 20px;
+  padding: 10px 25px 19px;
 }
 
 .composer {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
   border: 1px solid #41404e;
   background: #1d1d25;
-  border-radius: 24px;
-  padding: 15px 16px 12px;
+  border-radius: 17px;
+  padding: 13px 14px 10px;
   box-shadow: 0 10px 40px #00000020;
-  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
 }
 
 .composer:focus-within {
   border-color: #7868c3;
-  box-shadow: 0 0 0 3px #7868c31c, 0 12px 38px #00000028;
 }
 
 .composer textarea {
-  display: block;
   width: 100%;
-  min-height: 48px;
-  max-height: 220px;
+  min-height: 45px;
+  max-height: 180px;
   resize: vertical;
-  overflow-y: auto;
   background: transparent;
   color: var(--text);
   border: 0;
   outline: 0;
-  padding: 5px 3px 12px;
-  margin: 0;
-  line-height: 1.55;
-  font-size: 15px;
-  font-family: inherit;
-  transition: min-height .18s ease;
+  padding: 6px 4px;
+  line-height: 1.5;
+  font-size: 14px;
 }
 
-.composer textarea::placeholder { color: #858592; }
-.composer textarea:focus { outline: 0; box-shadow: none; }
-
-.selected-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 2px 8px;
+.composer textarea::placeholder {
+  color: #777783;
 }
 
 .composer-tools {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  margin-top: 1px;
-  padding-top: 9px;
+  margin-top: 5px;
 }
 
 .composer-left {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
-  min-width: 0;
 }
 
 .tool-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 34px;
   background: transparent;
-  border: 1px solid #ffffff1c;
-  color: #c2c1cc;
-  border-radius: 999px;
-  padding: 7px 12px;
+  border: 1px solid var(--border);
+  color: #b8b8c4;
+  border-radius: 8px;
+  padding: 7px 10px;
   font-size: 12px;
-  cursor: pointer;
-  transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
 }
 
 .tool-button:hover {
-  background: #ffffff0b;
-  border-color: #ffffff35;
-  color: var(--text);
+  background: var(--panel-hover);
 }
 
-.tool-button:active { transform: scale(.97); }
-.tool-button.selected { color: #d0c6ff; border-color: #7567b5; background: #8b78ff18; }
+.tool-button.selected {
+  color: #c4b8ff;
+  border-color: #7567b5;
+}
 
 .send-button {
-  display: grid;
-  place-items: center;
-  flex: 0 0 38px;
-  width: 38px;
-  height: 38px;
+  width: 35px;
+  height: 35px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 10px;
   background: var(--accent);
   color: white;
-  font-size: 23px;
-  line-height: 1;
+  font-size: 21px;
   font-weight: 700;
-  cursor: pointer;
-  transition: background .18s ease, transform .18s ease, opacity .18s ease;
 }
 
-.send-button:hover { background: var(--accent-hover); transform: translateY(-1px); }
-.send-button:active { transform: scale(.94); }
-.send-button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.send-button:hover {
+  background: var(--accent-hover);
+}
 
-@media (max-width: 600px) {
-  .composer-area { padding: 9px 10px 13px; }
-  .composer { border-radius: 21px; padding: 12px 12px 10px; }
-  .composer textarea { min-height: 44px; font-size: 14px; }
-  .composer-tools { gap: 8px; }
-  .composer-left { gap: 6px; }
-  .tool-button { min-height: 32px; padding: 6px 10px; font-size: 11px; }
-  .send-button { flex-basis: 36px; width: 36px; height: 36px; }
+.send-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .disclaimer {
@@ -1188,42 +1135,3 @@ button {
 
 .voice-card-focus { max-width: 760px; margin: 28px auto 40px; min-height: 430px; justify-content: center; }
 .voice-card-focus .voice-hint { max-width: 520px; }
-
-/* Composer cleanup: textarea and toolbar are one continuous surface. */
-.composer textarea { border: 0 !important; border-bottom: 0 !important; box-shadow: none !important; }
-.composer-tools { border-top: 0 !important; box-shadow: none !important; }
-.composer textarea:focus, .composer textarea:focus-visible { outline: 0 !important; border: 0 !important; box-shadow: none !important; }
-
-
-/* Final composer correction: one uninterrupted rounded input surface. */
-.main .composer,
-.main .composer:focus-within {
-  border: 1px solid #41404e;
-  overflow: hidden;
-}
-.main .composer #prompt,
-.main .composer textarea#prompt {
-  appearance: none !important;
-  -webkit-appearance: none !important;
-  display: block !important;
-  border: 0 !important;
-  border-bottom: 0 !important;
-  outline: 0 !important;
-  box-shadow: none !important;
-  resize: none !important;
-  background-image: none !important;
-}
-.main .composer #prompt::after,
-.main .composer #prompt::before,
-.main .composer .composer-tools::before,
-.main .composer .composer-tools::after {
-  content: none !important;
-  display: none !important;
-}
-.main .composer .composer-tools {
-  border: 0 !important;
-  border-top: 0 !important;
-  margin-top: 0 !important;
-  padding-top: 5px !important;
-  box-shadow: none !important;
-}
