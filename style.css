@@ -1232,3 +1232,20 @@ button {
   content: none !important;
   display: none !important;
 }
+
+
+/* CHAT VIEWPORT: hide the clipped top edge of the next message at the bottom. */
+.main:has(.workspace) .workspace {
+  position: relative;
+}
+.main:has(.workspace) .workspace::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 34px;
+  background: var(--bg);
+  pointer-events: none;
+  z-index: 4;
+}
