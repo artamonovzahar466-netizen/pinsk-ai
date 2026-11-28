@@ -1430,31 +1430,11 @@ async function sendMessage(value, options = {}) {
 
   const loading = options.voiceSession ? null : createLoadingMessage(
     imageMode ? "Pinsk создаёт изображение..." :
-      files.length ? "Pinsk изучает вложения..." : "Pinsk анализирует запрос..."
+      files.length ? "Pinsk изучает вложения..." : "Pinsk думает..."
   );
 
-  let loadingStatusTimer = null;
-  if (loading && !imageMode) {
-    const progressSteps = files.length
-      ? [
-          "Pinsk изучает вложения...",
-          "Pinsk анализирует содержимое файлов...",
-          "Pinsk сопоставляет данные и готовит выводы...",
-          "Pinsk формирует ответ..."
-        ]
-      : [
-          "Pinsk анализирует запрос...",
-          "Pinsk подбирает полезный ответ...",
-          "Pinsk формирует ответ..."
-        ];
-    let progressIndex = 0;
-    loadingStatusTimer = window.setInterval(() => {
-      const label = loading.querySelector(".message-content");
-      if (!label || !loading.isConnected) return;
-      progressIndex = (progressIndex + 1) % progressSteps.length;
-      label.textContent = progressSteps[progressIndex];
-    }, 1800);
-  }
+  // Keep one calm status instead of cycling through several phrases.
+  // This does not imply that the model is progressing through separate stages.
 
   try {
     if (imageMode) {
@@ -1550,7 +1530,6 @@ async function sendMessage(value, options = {}) {
     toast(error.message);
 
   } finally {
-    if (loadingStatusTimer) window.clearInterval(loadingStatusTimer);
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
