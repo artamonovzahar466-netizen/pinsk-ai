@@ -1992,7 +1992,7 @@ function renderStudio() {
           </div>
           <div class="studio-preview-column">
             <div class="studio-preview-heading"><strong>Предпросмотр</strong><span>Изолированный режим</span></div>
-            <iframe id="studioPreview" title="Предпросмотр сайта" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"></iframe>
+            <iframe id="studioPreview" title="Предпросмотр сайта" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
           </div>
         </div>
       </section>
