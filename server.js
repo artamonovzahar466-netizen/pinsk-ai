@@ -63,7 +63,9 @@ const AI_LANGUAGE_NAMES = {
   "es-ES": "испанском языке",
   "it-IT": "итальянском языке",
   "az-AZ": "азербайджанском языке",
-  "zh-CN": "упрощённом китайском языке"
+  "zh-CN": "упрощённом китайском языке",
+  "de-DE": "немецком языке",
+  "tr-TR": "турецком языке"
 };
 
 if (!process.env.DATABASE_URL) {
@@ -2182,6 +2184,121 @@ async function askAI(messages) {
 // Внешний TTS-провайдер и API-ключ для голосового режима не требуются.
 
 // ==========================================
+// UI TRANSLATION — LOCALIZE THE APPLICATION
+// ==========================================
+
+const uiTranslationRate = new Map();
+const UI_TRANSLATION_LANGUAGES = new Set([
+  "ru-RU", "en-GB", "kk-KZ", "zh-CN", "az-AZ",
+  "it-IT", "fr-FR", "es-ES", "de-DE", "tr-TR"
+]);
+
+app.post("/api/ui/translate", async (req, res) => {
+  try {
+    const ip = String(req.ip || req.socket?.remoteAddress || "unknown");
+    const now = Date.now();
+    const recent = (uiTranslationRate.get(ip) || []).filter(time => now - time < 10 * 60 * 1000);
+    if (recent.length >= 40) {
+      return res.status(429).json({ error: "Слишком много запросов перевода. Попробуй позже." });
+    }
+
+    const requestedLanguage = String(req.body?.language || "");
+    const texts = req.body?.texts;
+    if (!UI_TRANSLATION_LANGUAGES.has(requestedLanguage)) {
+      return res.status(400).json({ error: "Неподдерживаемый язык интерфейса." });
+    }
+    if (!Array.isArray(texts) || texts.length < 1 || texts.length > 40) {
+      return res.status(400).json({ error: "Некорректный список фраз для перевода." });
+    }
+
+    const cleanTexts = texts.map(value => String(value || "").trim());
+    if (cleanTexts.some(value => !value || value.length > 320)) {
+      return res.status(400).json({ error: "Одна из фраз имеет недопустимую длину." });
+    }
+
+    uiTranslationRate.set(ip, [...recent, now]);
+    if (uiTranslationRate.size > 2000) {
+      for (const [key, times] of uiTranslationRate) {
+        if (!times.some(time => now - time < 10 * 60 * 1000)) uiTranslationRate.delete(key);
+      }
+    }
+
+    if (requestedLanguage === "ru-RU") {
+      return res.json({ translations: cleanTexts });
+    }
+
+    const languageNames = {
+      "en-GB": "British English",
+      "kk-KZ": "Kazakh",
+      "zh-CN": "Simplified Chinese",
+      "az-AZ": "Azerbaijani",
+      "it-IT": "Italian",
+      "fr-FR": "French",
+      "es-ES": "Spanish",
+      "de-DE": "German",
+      "tr-TR": "Turkish"
+    };
+    const prompt = [
+      `Translate every item into ${languageNames[requestedLanguage]}.`,
+      "These are short UI labels and interface messages for a software application.",
+      "Return ONLY a valid JSON array of strings, in exactly the same order and with exactly the same number of items.",
+      "Do not translate user names, email addresses, URLs, file names, or content that is clearly user-provided.",
+      "Do not explain, do not add markdown fences, and do not omit or merge items.",
+      "Preserve numbers, punctuation, emoji, product names (Pinsk, Pinsk AI, Pinsk PRO), plan names (FREE, PRO, OWNER), and placeholders such as {name}, {count}, %s, IDs, and keyboard shortcuts.",
+      "Translate naturally for native users. Keep the meaning and level of formality consistent.",
+      "Source strings:",
+      JSON.stringify(cleanTexts)
+    ].join("\n");
+
+    const answer = await askAI([
+      { role: "system", content: "You are a professional software UI localization engine. Follow the requested JSON output format exactly." },
+      { role: "user", content: prompt }
+    ]);
+
+    let parsed = null;
+    for (let start = answer.indexOf("["); start !== -1; start = answer.indexOf("[", start + 1)) {
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let i = start; i < answer.length; i++) {
+        const ch = answer[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === "[") depth++;
+        else if (ch === "]" && --depth === 0) {
+          try {
+            const candidate = JSON.parse(answer.slice(start, i + 1));
+            if (Array.isArray(candidate)) parsed = candidate;
+          } catch (_) {}
+          break;
+        }
+      }
+      if (parsed) break;
+    }
+    if (!Array.isArray(parsed) || parsed.length !== cleanTexts.length) {
+      throw new Error("Модель вернула неполный перевод интерфейса.");
+    }
+    const translations = parsed.map((value, index) => {
+      const translated = typeof value === "string" ? value.trim() : "";
+      const originalTokens = cleanTexts[index].match(/\{[^{}]+\}|%[a-z]/gi) || [];
+      const translatedTokens = translated.match(/\{[^{}]+\}|%[a-z]/gi) || [];
+      const tokensMatch = originalTokens.length === translatedTokens.length && originalTokens.every(token => translatedTokens.includes(token));
+      return translated && translated.length <= 500 && tokensMatch ? translated : cleanTexts[index];
+    });
+
+    return res.json({ translations });
+  } catch (error) {
+    console.error("Pinsk UI translation error:", error);
+    return res.status(503).json({ error: "Не удалось перевести интерфейс. Попробуй ещё раз." });
+  }
+});
+
+// ==========================================
 // CHAT WITH FILES AND IMAGES
 // ==========================================
 
@@ -2212,7 +2329,9 @@ app.post(
         "es-ES": "испанском",
         "it-IT": "итальянском",
         "az-AZ": "азербайджанском",
-        "zh-CN": "китайском (упрощённый)",
+        "zh-CN": "китайском (упрощённом)",
+        "de-DE": "немецком",
+        "tr-TR": "турецком"
       };
       const requestedVoiceLanguage = String(req.body.voiceLanguage || req.body.language || "ru-RU");
       const requestedResponseLanguage = isVoiceMode
@@ -2885,7 +3004,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
           "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
           designLanguageInstruction + " " +
           "Создавай законченные, адаптивные, визуально качественные сайты. " +
-          "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
+          "Верни строго один валидный JSON-объект без Markdown и пояснений, с ключами html, css, js. Все три ключа обязательны; если стили или скрипты не нужны, верни пустую строку. Не оборачивай JSON в массив. " +
           "html — только содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
           "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
           "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
@@ -2898,23 +3017,43 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     ]);
 
-    let generated;
-    try {
-      const cleaned = String(answer)
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-      const start = cleaned.indexOf("{");
-      const end = cleaned.lastIndexOf("}");
-      if (start < 0 || end <= start) throw new Error("JSON not found");
-      generated = JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
+    // Gemini иногда добавляет Markdown, пояснения или фигурные скобки внутри
+    // строк. Извлекаем первый полноценный JSON-объект сбалансированным сканером.
+    function parseDesignProject(raw) {
+      const source = String(raw || "").trim();
+      const candidates = [source, source.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()];
+      for (const candidate of candidates) {
+        for (let start = candidate.indexOf("{"); start !== -1; start = candidate.indexOf("{", start + 1)) {
+          let depth = 0;
+          let inString = false;
+          let escaped = false;
+          for (let i = start; i < candidate.length; i++) {
+            const ch = candidate[i];
+            if (inString) {
+              if (escaped) escaped = false;
+              else if (ch === "\\") escaped = true;
+              else if (ch === '"') inString = false;
+              continue;
+            }
+            if (ch === '"') inString = true;
+            else if (ch === "{") depth++;
+            else if (ch === "}" && --depth === 0) {
+              try {
+                const value = JSON.parse(candidate.slice(start, i + 1));
+                if (value && typeof value === "object" && !Array.isArray(value)) return value;
+              } catch (_) {}
+              break;
+            }
+          }
+        }
+      }
+      throw new Error("ИИ вернул ответ, который не удалось разобрать как JSON-проект. Попробуй повторить запрос.");
     }
 
-    const html = String(generated.html || "").slice(0, 120000);
-    const css = String(generated.css || "").slice(0, 120000);
-    const js = String(generated.js || "").slice(0, 120000);
+    const generated = parseDesignProject(answer);
+    const html = String(generated.html || generated.body || generated.code?.html || "").slice(0, 120000);
+    const css = String(generated.css || generated.styles || generated.code?.css || "").slice(0, 120000);
+    const js = String(generated.js || generated.script || generated.code?.js || "").slice(0, 120000);
 
     if (!html.trim()) {
       throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
@@ -3139,6 +3278,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
-
 
