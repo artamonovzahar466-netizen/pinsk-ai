@@ -7,10 +7,6 @@
 
 
 
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -1387,7 +1383,7 @@ function setSendingState(value) {
   if (imageButton) imageButton.disabled = value;
 }
 
-function createLoadingMessage(text = "Pinsk думает...") {
+function createLoadingMessage(text = "Pinsk думает") {
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
 
@@ -1441,7 +1437,7 @@ async function sendMessage(value, options = {}) {
 
   const loading = options.voiceSession ? null : createLoadingMessage(
     imageMode ? "Pinsk создаёт изображение..." :
-      files.length ? "Pinsk изучает вложения..." : "Pinsk думает..."
+      files.length ? "Pinsk изучает вложения" : "Pinsk думает"
   );
 
   // Keep one calm status instead of cycling through several phrases.
@@ -1598,10 +1594,19 @@ function installImageModeButton() {
     }
   });
 
+  const reasoningButton = $("reasoningButton");
   const attachButton = $("attachButton");
 
-  if (attachButton && attachButton.parentElement === form) {
-    form.insertBefore(button, attachButton);
+  // Keep image generation directly below Deep Thinking, matching its size.
+  if (reasoningButton && reasoningButton.parentElement) {
+    const parent = reasoningButton.parentElement;
+    const stack = document.createElement("div");
+    stack.className = "composer-mode-stack";
+    parent.insertBefore(stack, reasoningButton);
+    stack.appendChild(reasoningButton);
+    stack.appendChild(button);
+  } else if (attachButton && attachButton.parentElement) {
+    attachButton.insertAdjacentElement("afterend", button);
   } else {
     form.appendChild(button);
   }
@@ -3396,10 +3401,11 @@ function installPinskUiFixes() {
     .pinsk-scroll-bottom {
       position: fixed;
       z-index: 1200;
-      right: max(28px, calc((100vw - 930px) / 2 + 28px));
-      bottom: 112px;
-      width: 44px;
-      height: 44px;
+      left: 50%;
+      right: auto;
+      bottom: 158px;
+      width: 38px;
+      height: 38px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -3412,7 +3418,7 @@ function installPinskUiFixes() {
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
-      transform: translateY(8px);
+      transform: translate(-50%, 8px);
       transition: opacity .18s ease, transform .18s ease, visibility .18s ease, background .18s ease;
       backdrop-filter: blur(10px);
     }
@@ -3421,7 +3427,7 @@ function installPinskUiFixes() {
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      transform: translateY(0);
+      transform: translate(-50%, 0);
     }
 
     .pinsk-scroll-bottom:hover {
@@ -3881,6 +3887,23 @@ function installPinskUiFixes() {
       display: none !important;
     }
 
+    /* Image mode is stacked directly below Deep Thinking. */
+    .composer-mode-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .composer-mode-stack .tool-button,
+    .composer-mode-stack .pinsk-image-mode {
+      width: 100%;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
     /* Кнопка генерации */
     .pinsk-image-mode {
       min-height: 40px;
@@ -4089,10 +4112,11 @@ function installPinskUiFixes() {
       }
 
       .pinsk-scroll-bottom {
-        right: 18px;
-        bottom: 92px;
-        width: 42px;
-        height: 42px;
+        left: 50%;
+        right: auto;
+        bottom: 158px;
+        width: 36px;
+        height: 36px;
       }
 
       .voice-inline-button {
