@@ -1,16 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -49,19 +38,22 @@ let usageData = null;
 let isSending = false;
 const APP_LANGUAGES = {
   "ru-RU": "Русский",
+  "en-GB": "English (UK)",
   "kk-KZ": "Қазақша",
-  "en-GB": "English",
+  "zh-CN": "中文（简体）",
+  "az-AZ": "Azərbaycanca",
+  "it-IT": "Italiano",
   "fr-FR": "Français",
   "es-ES": "Español",
-  "it-IT": "Italiano",
-  "az-AZ": "Azərbaycanca",
-  "zh-CN": "中文（简体）"
+  "de-DE": "Deutsch",
+  "tr-TR": "Türkçe"
 };
 const APP_LANGUAGE_CODES = Object.keys(APP_LANGUAGES);
 let language = localStorage.getItem(STORAGE.language) || "ru-RU";
 if (language === "ru") language = "ru-RU";
 if (language === "en") language = "en-GB";
 if (!APP_LANGUAGE_CODES.includes(language)) language = "ru-RU";
+document.documentElement.lang = language;
 let recognition = null;
 let voiceActive = false;
 let voiceChatId = null;
@@ -395,6 +387,225 @@ async function api(url, options = {}) {
   }
 
   return data;
+}
+
+/* =========================================
+   ПОЛНАЯ ЛОКАЛИЗАЦИЯ ИНТЕРФЕЙСА
+   ========================================= */
+
+const UI_TRANSLATION_CACHE_PREFIX = "pinsk_ui_translations_v2_";
+const UI_TRANSLATABLE_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"];
+const UI_TRANSLATION_EXCLUDED = [
+  "script", "style", "noscript", "pre", "code",
+  "#messages", "#history", ".message", ".chat-message",
+  "#webSearchAnswer", "#webSearchResults", ".web-search-answer__text",
+  ".web-search-result__snippet", "#analysisResult", "#studioResult",
+  "#studioImageResult", "#profileName", ".avatar",
+  "[data-no-translate]", "[contenteditable='true']"
+].join(",");
+let uiTranslationObserver = null;
+let uiTranslationTimer = null;
+let uiTranslationRunning = false;
+let uiTranslationAgain = false;
+let uiTranslationApplying = false;
+
+function getUiTranslationCache() {
+  try {
+    return JSON.parse(localStorage.getItem(UI_TRANSLATION_CACHE_PREFIX + language) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function setUiTranslationCache(cache) {
+  try {
+    localStorage.setItem(UI_TRANSLATION_CACHE_PREFIX + language, JSON.stringify(cache));
+  } catch (error) {
+    console.warn("Pinsk UI translation cache:", error);
+  }
+}
+
+function shouldTranslateUiTextNode(node) {
+  const parent = node?.parentElement;
+  if (!parent || parent.closest(UI_TRANSLATION_EXCLUDED) || parent.closest("textarea, script, style, pre, code")) return false;
+  const value = String(node.nodeValue || "").trim();
+  return Boolean(value && /[А-Яа-яЁё]/.test(value) && value.length <= 320);
+}
+
+function collectUiTranslationTargets() {
+  const targets = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+
+  while ((node = walker.nextNode())) {
+    if (!shouldTranslateUiTextNode(node)) continue;
+    if (node.__pinskOriginalText === undefined || (node.nodeValue !== node.__pinskLastTranslation && node.nodeValue !== node.__pinskOriginalText)) {
+      node.__pinskOriginalText = node.nodeValue;
+      node.__pinskLastTranslation = undefined;
+    }
+    const original = String(node.__pinskOriginalText || "").trim();
+    if (!original) continue;
+    targets.push({ type: "text", node, original });
+  }
+
+  document.querySelectorAll("body *").forEach(element => {
+    if (element.closest(UI_TRANSLATION_EXCLUDED)) return;
+    element.__pinskOriginalAttrs ||= {};
+    element.__pinskLastTranslatedAttrs ||= {};
+    UI_TRANSLATABLE_ATTRIBUTES.forEach(attribute => {
+      const value = element.getAttribute(attribute);
+      if (!value || !/[А-Яа-яЁё]/.test(value) || value.length > 320) return;
+      if (element.__pinskOriginalAttrs[attribute] === undefined || (value !== element.__pinskLastTranslatedAttrs[attribute] && value !== element.__pinskOriginalAttrs[attribute])) {
+        element.__pinskOriginalAttrs[attribute] = value;
+        element.__pinskLastTranslatedAttrs[attribute] = undefined;
+      }
+      const original = String(element.__pinskOriginalAttrs[attribute] || "").trim();
+      if (!original) return;
+      targets.push({ type: "attribute", element, attribute, original });
+    });
+  });
+
+  return targets;
+}
+
+function restoreOriginalUiText() {
+  uiTranslationApplying = true;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.__pinskOriginalText !== undefined && node.nodeValue !== node.__pinskOriginalText) {
+      node.nodeValue = node.__pinskOriginalText;
+    }
+    node.__pinskLastTranslation = undefined;
+  }
+  document.querySelectorAll("body *").forEach(element => {
+    if (!element.__pinskOriginalAttrs) return;
+    Object.entries(element.__pinskOriginalAttrs).forEach(([attribute, value]) => {
+      if (element.getAttribute(attribute) !== value) {
+        if (value === null || value === undefined) element.removeAttribute(attribute);
+        else element.setAttribute(attribute, value);
+      }
+      if (element.__pinskLastTranslatedAttrs) element.__pinskLastTranslatedAttrs[attribute] = undefined;
+    });
+  });
+  uiTranslationApplying = false;
+}
+
+async function requestUiTranslations(texts) {
+  const result = {};
+  const cache = getUiTranslationCache();
+  const missing = [...new Set(texts)].filter(value => !(value in cache));
+
+  for (let offset = 0; offset < missing.length; offset += 40) {
+    const batch = missing.slice(offset, offset + 40);
+    const response = await api("/api/ui/translate", {
+      method: "POST",
+      body: JSON.stringify({ language, texts: batch })
+    });
+    const translations = Array.isArray(response.translations) ? response.translations : [];
+    batch.forEach((original, index) => {
+      const translated = typeof translations[index] === "string" ? translations[index].trim() : "";
+      if (translated) cache[original] = translated;
+    });
+  }
+
+  setUiTranslationCache(cache);
+  texts.forEach(original => {
+    if (cache[original]) result[original] = cache[original];
+  });
+  return result;
+}
+
+async function translateUiInterface(forceRestore = false) {
+  if (!document.body) return;
+  if (uiTranslationRunning) {
+    uiTranslationAgain = true;
+    return;
+  }
+
+  uiTranslationRunning = true;
+  try {
+    if (forceRestore) restoreOriginalUiText();
+    document.documentElement.lang = language;
+
+    if (language === "ru-RU") {
+      restoreOriginalUiText();
+      return;
+    }
+
+    const targets = collectUiTranslationTargets();
+    const originals = [...new Set(targets.map(target => target.original))];
+    const cache = getUiTranslationCache();
+    const missing = originals.filter(value => !(value in cache));
+    if (missing.length) await requestUiTranslations(missing);
+
+    const freshCache = getUiTranslationCache();
+    uiTranslationApplying = true;
+    targets.forEach(target => {
+      const translated = freshCache[target.original];
+      if (!translated) return;
+      if (target.type === "text") {
+        const leading = (target.node.__pinskOriginalText.match(/^\s*/) || [""])[0];
+        const trailing = (target.node.__pinskOriginalText.match(/\s*$/) || [""])[0];
+        const translatedNodeValue = leading + translated + trailing;
+        if (target.node.nodeValue !== translatedNodeValue) target.node.nodeValue = translatedNodeValue;
+        target.node.__pinskLastTranslation = translatedNodeValue;
+      } else {
+        if (target.element.getAttribute(target.attribute) !== translated) target.element.setAttribute(target.attribute, translated);
+        target.element.__pinskLastTranslatedAttrs ||= {};
+        target.element.__pinskLastTranslatedAttrs[target.attribute] = translated;
+      }
+    });
+    uiTranslationApplying = false;
+  } catch (error) {
+    uiTranslationApplying = false;
+    console.warn("Pinsk UI translation failed:", error);
+  } finally {
+    uiTranslationRunning = false;
+    if (uiTranslationAgain) {
+      uiTranslationAgain = false;
+      scheduleUiTranslation();
+    }
+  }
+}
+
+function scheduleUiTranslation(forceRestore = false) {
+  clearTimeout(uiTranslationTimer);
+  uiTranslationTimer = setTimeout(() => translateUiInterface(forceRestore), 180);
+}
+
+function installUiTranslationObserver() {
+  if (uiTranslationObserver || !document.body) return;
+  uiTranslationObserver = new MutationObserver(records => {
+    if (uiTranslationApplying) return;
+    for (const record of records) {
+      if (record.type === "characterData") {
+        const node = record.target;
+        if (node.__pinskLastTranslation !== undefined && node.nodeValue === node.__pinskLastTranslation) continue;
+        node.__pinskOriginalText = node.nodeValue;
+        node.__pinskLastTranslation = undefined;
+      } else if (record.type === "attributes") {
+        const element = record.target;
+        const attribute = record.attributeName;
+        const value = element.getAttribute(attribute);
+        element.__pinskOriginalAttrs ||= {};
+        element.__pinskLastTranslatedAttrs ||= {};
+        if (value !== element.__pinskLastTranslatedAttrs[attribute]) {
+          element.__pinskOriginalAttrs[attribute] = value;
+          element.__pinskLastTranslatedAttrs[attribute] = undefined;
+        }
+      }
+    }
+    scheduleUiTranslation();
+  });
+  uiTranslationObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: UI_TRANSLATABLE_ATTRIBUTES
+  });
+  scheduleUiTranslation();
 }
 
 /* =========================================
@@ -790,7 +1001,7 @@ function showProfile() {
   showModal(`
     <div class="profile-modal">
       <h2>Мой аккаунт</h2>
-      <h3>${escapeHTML(currentUser.name)}</h3>
+      <h3 data-no-translate>${escapeHTML(currentUser.name)}</h3>
       <p>${escapeHTML(currentUser.email)}</p>
       <p>Тариф: ${escapeHTML(role)}</p>
       ${role === "OWNER" ? "<p>Владелец Pinsk AI. Полный доступ без ограничений.</p>" : ""}
@@ -1141,6 +1352,7 @@ function renderAttachmentPreview() {
 
       image.src = url;
       image.alt = file.name;
+      image.setAttribute("data-no-translate", "true");
 
       item.appendChild(image);
     } else {
@@ -1156,6 +1368,7 @@ function renderAttachmentPreview() {
 
     const name = document.createElement("div");
     name.className = "pinsk-attachment-name";
+    name.setAttribute("data-no-translate", "true");
     name.textContent = file.name;
 
     const size = document.createElement("div");
@@ -1167,6 +1380,7 @@ function renderAttachmentPreview() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "pinsk-attachment-remove";
+    remove.setAttribute("data-no-translate", "true");
     remove.textContent = "×";
     remove.title = "Удалить файл";
     remove.setAttribute("aria-label", `Удалить файл ${file.name}`);
@@ -1511,12 +1725,8 @@ async function sendMessage(value, options = {}) {
 
       const answer = data.answer || "Нет ответа.";
 
-      if (options.voiceSession) {
-        if (options.speak) await speakAnswer(answer);
-      } else {
-        renderMessage("assistant", answer);
-        if (options.speak) speakAnswer(answer);
-      }
+      // Pinsk now uses text-only chat; responses are never read aloud.
+      renderMessage("assistant", answer);
 
       await loadUsage();
       if (!options.voiceSession) await loadHistory();
@@ -1626,7 +1836,10 @@ function getPageView() {
 function renderPage(page) {
   closeModal();
 
-  if (currentPage === "voice" && page !== "voice") stopVoice();
+  if (page === "voice") {
+    toast("Голосовой режим отключён. Используй обычный текстовый чат.");
+    page = "chat";
+  }
 
   if (page === "admin" && !isAdmin()) {
     toast("Доступ к админ-панели разрешён только владельцу.");
@@ -1647,7 +1860,6 @@ function renderPage(page) {
     plugins: "Плагины",
     analysis: "Анализ данных",
     studio: "Студия дизайна",
-    voice: "Голосовой режим",
     plans: "Тарифы",
     admin: "Админ-панель"
   };
@@ -1690,7 +1902,7 @@ function renderPageContent(page) {
         <div class="dashboard-grid">
           <div class="dashboard-card">
             <h3>Аккаунт</h3>
-            <p>${escapeHTML(currentUser?.name || "Гость")}</p>
+            <p data-no-translate>${escapeHTML(currentUser?.name || "Гость")}</p>
             <p>${escapeHTML(currentUser?.role || "FREE")}</p>
           </div>
           <div class="dashboard-card">
@@ -2496,8 +2708,8 @@ function renderProjects() {
   container.innerHTML = projects.length
     ? projects.map(project => `
       <div class="dashboard-card">
-        <h3>${escapeHTML(project.name)}</h3>
-        <p>${escapeHTML(project.description || "")}</p>
+        <h3 data-no-translate>${escapeHTML(project.name)}</h3>
+        <p data-no-translate>${escapeHTML(project.description || "")}</p>
         <button class="secondary-button" data-delete-project="${escapeHTML(project.id)}">
           Удалить
         </button>
@@ -2547,8 +2759,8 @@ function renderLibrary() {
   container.innerHTML = library.length
     ? library.map(item => `
       <div class="dashboard-card">
-        <h3>${escapeHTML(item.title)}</h3>
-        <p>${escapeHTML(item.content)}</p>
+        <h3 data-no-translate>${escapeHTML(item.title)}</h3>
+        <p data-no-translate>${escapeHTML(item.content)}</p>
         <button class="secondary-button" data-delete-library="${escapeHTML(item.id)}">
           Удалить
         </button>
@@ -2694,8 +2906,8 @@ async function loadAdminUsers() {
 
     container.innerHTML = users.map(user => `
       <div class="dashboard-card">
-        <h3>${escapeHTML(user.name)}</h3>
-        <p>${escapeHTML(user.email)}</p>
+        <h3 data-no-translate>${escapeHTML(user.name)}</h3>
+        <p data-no-translate>${escapeHTML(user.email)}</p>
         <p>Тариф: ${escapeHTML(user.role)}</p>
         <p>Статус: ${user.is_blocked ? "Заблокирован" : "Активен"}</p>
       </div>
@@ -3072,11 +3284,11 @@ function showSettings() {
   showModal(`
     <h2>Настройки Pinsk</h2>
 
-    <label>Язык ответов Pinsk</label>
+    <label>Язык интерфейса и ответов Pinsk</label>
     <select id="languageSelect">
       ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
-    <p class="settings-hint">Выбранный язык используется в чате, голосовом режиме, генерации сайтов и подсказках для изображений. Язык элементов интерфейса пока остаётся русским.</p>
+    <p class="settings-hint">Язык применяется ко всему интерфейсу Pinsk, ответам ИИ, генерации сайтов и описаниям изображений.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3090,8 +3302,6 @@ function showSettings() {
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
     localStorage.setItem(STORAGE.language, language);
-    voiceLanguage = language;
-    localStorage.setItem("pinsk_voice_language", voiceLanguage);
 
     localStorage.setItem(
       STORAGE.reasoning,
@@ -3099,6 +3309,9 @@ function showSettings() {
     );
 
     closeModal();
+    document.documentElement.lang = language;
+    renderPage(currentPage);
+    scheduleUiTranslation(true);
     toast("Настройки сохранены.");
   };
 }
@@ -4138,13 +4351,13 @@ async function init() {
   console.log("Pinsk AI: запуск...");
 
   installPinskUiFixes();
+  installUiTranslationObserver();
 
   // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
   installStudioNavigation();
 
   initEvents();
-  installVoiceButton();
   installImageModeButton();
   renderAttachmentPreview();
   updateProfile();
