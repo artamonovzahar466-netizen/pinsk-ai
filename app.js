@@ -3548,7 +3548,7 @@ function installPinskUiFixes() {
     .pinsk-scroll-bottom {
       position: fixed;
       z-index: 1200;
-      left: 50%;
+      left: calc(50% + 18px);
       right: auto;
       bottom: 124px;
       width: 40px;
@@ -4306,7 +4306,7 @@ function installPinskUiFixes() {
       }
 
       .pinsk-scroll-bottom {
-        left: 50%;
+        left: calc(50% + 14px);
         right: auto;
         bottom: 108px;
         width: 38px;
