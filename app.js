@@ -1,5 +1,6 @@
 
 
+
 "use strict";
 
 /* =========================================
@@ -49,11 +50,155 @@ const APP_LANGUAGES = {
   "tr-TR": "Türkçe"
 };
 const APP_LANGUAGE_CODES = Object.keys(APP_LANGUAGES);
+
+// Локальный словарь интерфейса: не обращается к Gemini и не расходует API-ключи.
+const UI_TRANSLATIONS = {
+  "Новый чат": ["New chat", "Жаңа чат", "新聊天", "Yeni sohbet", "Nuova chat", "Nouvelle discussion", "Nuevo chat", "Neuer Chat", "Yeni sohbet"],
+  "Рабочее пространство": ["Workspace", "Жұмыс кеңістігі", "工作区", "İş alanı", "Spazio di lavoro", "Espace de travail", "Espacio de trabajo", "Arbeitsbereich", "Çalışma alanı"],
+  "Чат": ["Chat", "Чат", "聊天", "Söhbət", "Chat", "Discussion", "Chat", "Chat", "Sohbet"],
+  "Обзор": ["Overview", "Шолу", "概览", "İcmal", "Panoramica", "Vue d’ensemble", "Resumen", "Übersicht", "Genel bakış"],
+  "Проекты": ["Projects", "Жобалар", "项目", "Layihələr", "Progetti", "Projets", "Proyectos", "Projekte", "Projeler"],
+  "Библиотека": ["Library", "Кітапхана", "资料库", "Kitabxana", "Libreria", "Bibliothèque", "Biblioteca", "Bibliothek", "Kütüphane"],
+  "Плагины": ["Plugins", "Плагиндер", "插件", "Pluginlər", "Plugin", "Extensions", "Complementos", "Plugins", "Eklentiler"],
+  "Анализ данных": ["Data analysis", "Деректерді талдау", "数据分析", "Məlumat təhlili", "Analisi dei dati", "Analyse de données", "Análisis de datos", "Datenanalyse", "Veri analizi"],
+  "Студия дизайна": ["Design Studio", "Дизайн студиясы", "设计工作室", "Dizayn studiyası", "Studio di design", "Studio de design", "Estudio de diseño", "Designstudio", "Tasarım stüdyosu"],
+  "История": ["History", "Тарих", "历史", "Tarixçə", "Cronologia", "Historique", "Historial", "Verlauf", "Geçmiş"],
+  "Ваш тариф": ["Your plan", "Сіздің тарифіңіз", "您的套餐", "Tarifiniz", "Il tuo piano", "Votre offre", "Tu plan", "Dein Tarif", "Planınız"],
+  "Попробуйте возможности Pinsk PRO": ["Try Pinsk PRO", "Pinsk PRO мүмкіндіктерін қолданып көріңіз", "体验 Pinsk PRO", "Pinsk PRO imkanlarını sınayın", "Prova Pinsk PRO", "Essayez Pinsk PRO", "Prueba Pinsk PRO", "Probiere Pinsk PRO", "Pinsk PRO'yu deneyin"],
+  "Улучшить тариф": ["Upgrade plan", "Тарифті жаңарту", "升级套餐", "Tarifi yüksəlt", "Passa al piano superiore", "Passer à l’offre supérieure", "Mejorar plan", "Tarif upgraden", "Planı yükselt"],
+  "Бесплатный план": ["Free plan", "Тегін жоспар", "免费套餐", "Pulsuz plan", "Piano gratuito", "Offre gratuite", "Plan gratuito", "Kostenloser Tarif", "Ücretsiz plan"],
+  "Настройки": ["Settings", "Параметрлер", "设置", "Parametrlər", "Impostazioni", "Paramètres", "Configuración", "Einstellungen", "Ayarlar"],
+  "Чем могу помочь?": ["How can I help?", "Қалай көмектесе аламын?", "我能帮你什么？", "Necə kömək edə bilərəm?", "Come posso aiutarti?", "Comment puis-je aider ?", "¿Cómo puedo ayudarte?", "Wie kann ich helfen?", "Nasıl yardımcı olabilirim?"],
+  "Я Pinsk — ваш интеллектуальный помощник.": ["I'm Pinsk — your AI assistant.", "Мен Pinsk — сіздің ақылды көмекшіңіз.", "我是 Pinsk，你的智能助手。", "Mən Pinsk — sizin ağıllı köməkçinizəm.", "Sono Pinsk, il tuo assistente intelligente.", "Je suis Pinsk, votre assistant intelligent.", "Soy Pinsk, tu asistente inteligente.", "Ich bin Pinsk – dein intelligenter Assistent.", "Ben Pinsk, akıllı asistanınızım."],
+  "Написать текст": ["Write text", "Мәтін жазу", "撰写文本", "Mətn yaz", "Scrivi un testo", "Rédiger un texte", "Escribir texto", "Text schreiben", "Metin yaz"],
+  "Письма, статьи и идеи": ["Emails, articles and ideas", "Хаттар, мақалалар және идеялар", "邮件、文章和创意", "Məktublar, məqalələr və ideyalar", "Email, articoli e idee", "E-mails, articles et idées", "Correos, artículos e ideas", "E-Mails, Artikel und Ideen", "E-postalar, makaleler ve fikirler"],
+  "Объяснить тему": ["Explain a topic", "Тақырыпты түсіндіру", "解释主题", "Mövzunu izah et", "Spiega un argomento", "Expliquer un sujet", "Explicar un tema", "Thema erklären", "Konuyu açıkla"],
+  "Понятные ответы": ["Clear answers", "Түсінікті жауаптар", "清晰的回答", "Aydın cavablar", "Risposte chiare", "Réponses claires", "Respuestas claras", "Klare Antworten", "Anlaşılır yanıtlar"],
+  "Написать код": ["Write code", "Код жазу", "编写代码", "Kod yaz", "Scrivi codice", "Écrire du code", "Escribir código", "Code schreiben", "Kod yaz"],
+  "Программирование": ["Programming", "Бағдарламалау", "编程", "Proqramlaşdırma", "Programmazione", "Programmation", "Programación", "Programmierung", "Programlama"],
+  "Найти идею": ["Find an idea", "Идея табу", "寻找创意", "İdeya tap", "Trova un’idea", "Trouver une idée", "Encontrar una idea", "Idee finden", "Fikir bul"],
+  "Творчество и проекты": ["Creativity and projects", "Шығармашылық және жобалар", "创意与项目", "Yaradıcılıq və layihələr", "Creatività e progetti", "Créativité et projets", "Creatividad y proyectos", "Kreativität und Projekte", "Yaratıcılık ve projeler"],
+  "Файл": ["File", "Файл", "文件", "Fayl", "File", "Fichier", "Archivo", "Datei", "Dosya"],
+  "Глубокое мышление": ["Deep thinking", "Терең ойлау", "深度思考", "Dərin düşünmə", "Ragionamento approfondito", "Réflexion approfondie", "Razonamiento profundo", "Tiefes Denken", "Derin düşünme"],
+  "Спросите что-нибудь у Pinsk...": ["Ask Pinsk anything...", "Pinsk-тен кез келген нәрсені сұраңыз...", "向 Pinsk 提问...", "Pinsk-ə istədiyinizi soruşun...", "Chiedi qualcosa a Pinsk...", "Demandez quelque chose à Pinsk...", "Pregunta lo que quieras a Pinsk...", "Frag Pinsk etwas...", "Pinsk'e bir şey sorun..."],
+  "Отправить": ["Send", "Жіберу", "发送", "Göndər", "Invia", "Envoyer", "Enviar", "Senden", "Gönder"],
+  "Pinsk может допускать ошибки. Проверяйте важную информацию.": ["Pinsk can make mistakes. Check important information.", "Pinsk қателесуі мүмкін. Маңызды ақпаратты тексеріңіз.", "Pinsk 可能会出错。请核实重要信息。", "Pinsk səhv edə bilər. Vacib məlumatları yoxlayın.", "Pinsk può commettere errori. Verifica le informazioni importanti.", "Pinsk peut faire des erreurs. Vérifiez les informations importantes.", "Pinsk puede cometer errores. Verifica la información importante.", "Pinsk kann Fehler machen. Prüfe wichtige Informationen.", "Pinsk hata yapabilir. Önemli bilgileri kontrol edin."],
+  "Настройки Pinsk": ["Pinsk settings", "Pinsk параметрлері", "Pinsk 设置", "Pinsk parametrləri", "Impostazioni Pinsk", "Paramètres Pinsk", "Configuración de Pinsk", "Pinsk-Einstellungen", "Pinsk ayarları"],
+  "Язык ответов Pinsk": ["Pinsk response language", "Pinsk жауаптарының тілі", "Pinsk 回复语言", "Pinsk cavab dili", "Lingua delle risposte di Pinsk", "Langue des réponses de Pinsk", "Idioma de respuestas de Pinsk", "Sprache der Pinsk-Antworten", "Pinsk yanıt dili"],
+  "Глубокое рассуждение": ["Deep reasoning", "Терең пайымдау", "深度推理", "Dərin mühakimə", "Ragionamento approfondito", "Raisonnement approfondi", "Razonamiento profundo", "Tiefes Schlussfolgern", "Derin akıl yürütme"],
+  "Сохранить": ["Save", "Сақтау", "保存", "Yadda saxla", "Salva", "Enregistrer", "Guardar", "Speichern", "Kaydet"],
+  "Настройки сохранены.": ["Settings saved.", "Параметрлер сақталды.", "设置已保存。", "Parametrlər saxlanıldı.", "Impostazioni salvate.", "Paramètres enregistrés.", "Configuración guardada.", "Einstellungen gespeichert.", "Ayarlar kaydedildi."],
+  "Язык интерфейса и ответов": ["Interface and response language", "Тіл және жауаптар", "界面和回复语言", "İnterfeys və cavab dili", "Lingua dell'interfaccia e delle risposte", "Langue de l’interface et des réponses", "Idioma de interfaz y respuestas", "Sprache der Oberfläche und Antworten", "Arayüz ve yanıt dili"],
+  "Создание сайтов": ["Website creation", "Сайт жасау", "网站创建", "Veb sayt yaradılması", "Creazione di siti web", "Création de sites web", "Creación de sitios web", "Website-Erstellung", "Web sitesi oluşturma"],
+  "Конструктор сайтов": ["Website builder", "Сайт құрастырушы", "网站构建器", "Veb sayt qurucusu", "Creatore di siti web", "Créateur de sites web", "Creador de sitios web", "Website-Builder", "Web sitesi oluşturucu"],
+  "Опиши сайт — Pinsk подготовит HTML, CSS и JavaScript, а ты сможешь изменить код и посмотреть результат.": ["Describe a website — Pinsk will prepare the HTML, CSS and JavaScript, and you can edit the code and preview the result.", "Сайтты сипаттаңыз — Pinsk HTML, CSS және JavaScript дайындайды, кодты өзгертіп, нәтижені көре аласыз.", "描述网站 — Pinsk 将生成 HTML、CSS 和 JavaScript，你可以编辑代码并预览结果。", "Saytı təsvir et — Pinsk HTML, CSS və JavaScript hazırlayacaq, kodu dəyişib nəticəyə baxa biləcəksən.", "Descrivi il sito: Pinsk preparerà HTML, CSS e JavaScript, che potrai modificare e visualizzare.", "Décrivez le site : Pinsk préparera le HTML, le CSS et le JavaScript, que vous pourrez modifier et prévisualiser.", "Describe el sitio: Pinsk preparará HTML, CSS y JavaScript para que puedas editar el código y ver el resultado.", "Beschreibe die Website: Pinsk erstellt HTML, CSS und JavaScript, die du bearbeiten und ansehen kannst.", "Siteyi açıkla: Pinsk HTML, CSS ve JavaScript hazırlayacak; kodu düzenleyip sonucu görebileceksin."],
+  "Какой сайт или интерфейс создать?": ["What website or interface should I create?", "Қандай сайт немесе интерфейс жасау керек?", "要创建什么网站或界面？", "Hansı saytı və ya interfeysi yaradaq?", "Quale sito o interfaccia devo creare?", "Quel site ou quelle interface créer ?", "¿Qué sitio web o interfaz debo crear?", "Welche Website oder Oberfläche soll erstellt werden?", "Hangi web sitesi veya arayüz oluşturulsun?"],
+  "Сгенерировать сайт": ["Generate website", "Сайт жасау", "生成网站", "Sayt yarat", "Genera sito", "Générer le site", "Generar sitio web", "Website erstellen", "Web sitesi oluştur"],
+  "Создать изображение": ["Create image", "Сурет жасау", "创建图像", "Şəkil yarat", "Crea immagine", "Créer une image", "Crear imagen", "Bild erstellen", "Görsel oluştur"],
+  "Генерация изображений": ["Image generation", "Сурет генерациясы", "图像生成", "Şəkil yaradılması", "Generazione immagini", "Génération d’images", "Generación de imágenes", "Bildgenerierung", "Görsel oluşturma"],
+  "Предпросмотр": ["Preview", "Алдын ала қарау", "预览", "Önizləmə", "Anteprima", "Aperçu", "Vista previa", "Vorschau", "Önizleme"],
+  "Код": ["Code", "Код", "代码", "Kod", "Codice", "Code", "Código", "Code", "Kod"],
+  "HTML": ["HTML", "HTML", "HTML", "HTML", "HTML", "HTML", "HTML", "HTML", "HTML"],
+  "CSS": ["CSS", "CSS", "CSS", "CSS", "CSS", "CSS", "CSS", "CSS", "CSS"],
+  "JavaScript": ["JavaScript", "JavaScript", "JavaScript", "JavaScript", "JavaScript", "JavaScript", "JavaScript", "JavaScript", "JavaScript"],
+  "Скачать": ["Download", "Жүктеп алу", "下载", "Yüklə", "Scarica", "Télécharger", "Descargar", "Herunterladen", "İndir"],
+  "Сохранить проект": ["Save project", "Жобаны сақтау", "保存项目", "Layihəni saxla", "Salva progetto", "Enregistrer le projet", "Guardar proyecto", "Projekt speichern", "Projeyi kaydet"],
+  "Изменить код": ["Edit code", "Кодты өзгерту", "编辑代码", "Kodu redaktə et", "Modifica codice", "Modifier le code", "Editar código", "Code bearbeiten", "Kodu düzenle"],
+  "Начать разговор": ["Start conversation", "Әңгімені бастау", "开始对话", "Söhbətə başla", "Avvia conversazione", "Démarrer la conversation", "Iniciar conversación", "Gespräch starten", "Konuşmayı başlat"],
+  "Обычный режим чата.": ["Normal chat mode.", "Қалыпты чат режимі.", "普通聊天模式。", "Adi çat rejimi.", "Modalità chat normale.", "Mode de discussion normal.", "Modo de chat normal.", "Normaler Chatmodus.", "Normal sohbet modu."],
+  "Доступ к админ-панели разрешён только владельцу.": ["Admin panel access is restricted to the owner.", "Әкімші панеліне тек иесі кіре алады.", "仅所有者可以访问管理面板。", "Admin panelinə yalnız sahib daxil ola bilər.", "L’accesso al pannello admin è riservato al proprietario.", "L’accès au panneau d’administration est réservé au propriétaire.", "El acceso al panel de administración está reservado al propietario.", "Der Zugriff auf das Admin-Panel ist dem Eigentümer vorbehalten.", "Yönetici paneline yalnızca sahip erişebilir."],
+  "Файл добавлен.": ["File added.", "Файл қосылды.", "文件已添加。", "Fayl əlavə edildi.", "File aggiunto.", "Fichier ajouté.", "Archivo añadido.", "Datei hinzugefügt.", "Dosya eklendi."],
+  "Сначала выбери файл.": ["Select a file first.", "Алдымен файлды таңда.", "请先选择文件。", "Əvvəlcə fayl seç.", "Seleziona prima un file.", "Sélectionnez d’abord un fichier.", "Primero selecciona un archivo.", "Wähle zuerst eine Datei aus.", "Önce bir dosya seç."],
+  "Формат файла не поддерживается.": ["This file format is not supported.", "Бұл файл пішіміне қолдау көрсетілмейді.", "不支持此文件格式。", "Bu fayl formatı dəstəklənmir.", "Formato file non supportato.", "Format de fichier non pris en charge.", "Formato de archivo no compatible.", "Dieses Dateiformat wird nicht unterstützt.", "Bu dosya biçimi desteklenmiyor."],
+  "Материал сохранён.": ["Item saved.", "Материал сақталды.", "内容已保存。", "Material saxlanıldı.", "Elemento salvato.", "Élément enregistré.", "Elemento guardado.", "Eintrag gespeichert.", "Öğe kaydedildi."],
+  "Проект создан.": ["Project created.", "Жоба жасалды.", "项目已创建。", "Layihə yaradıldı.", "Progetto creato.", "Projet créé.", "Proyecto creado.", "Projekt erstellt.", "Proje oluşturuldu."],
+  "Введи название проекта.": ["Enter a project name.", "Жоба атауын енгіз.", "输入项目名称。", "Layihə adını daxil et.", "Inserisci il nome del progetto.", "Saisissez le nom du projet.", "Introduce el nombre del proyecto.", "Gib einen Projektnamen ein.", "Proje adını gir."],
+  "Заполни оба поля.": ["Complete both fields.", "Екі өрісті де толтыр.", "请填写两个字段。", "Hər iki sahəni doldur.", "Compila entrambi i campi.", "Remplissez les deux champs.", "Completa ambos campos.", "Fülle beide Felder aus.", "İki alanı da doldur."],
+  "Сервер временно недоступен. Попробуй обновить страницу.": ["The server is temporarily unavailable. Try refreshing the page.", "Сервер уақытша қолжетімсіз. Бетті жаңартып көр.", "服务器暂时不可用。请尝试刷新页面。", "Server müvəqqəti əlçatan deyil. Səhifəni yeniləyin.", "Il server non è temporaneamente disponibile. Prova ad aggiornare la pagina.", "Le serveur est temporairement indisponible. Essayez d’actualiser la page.", "El servidor no está disponible temporalmente. Intenta actualizar la página.", "Der Server ist vorübergehend nicht verfügbar. Aktualisiere die Seite.", "Sunucu geçici olarak kullanılamıyor. Sayfayı yenilemeyi dene."]
+};
+
+const uiOriginalText = new WeakMap();
+const uiOriginalAttributes = new WeakMap();
+
+function translatePhrase(text, localeIndex) {
+  if (!text || localeIndex <= 0) return text;
+  let result = String(text);
+  const keys = Object.keys(UI_TRANSLATIONS).sort((a, b) => b.length - a.length);
+  for (const source of keys) {
+    const translated = UI_TRANSLATIONS[source]?.[localeIndex - 1];
+    if (!translated || source === translated || !result.includes(source)) continue;
+    result = result.split(source).join(translated);
+  }
+  return result;
+}
+
+function translateUI() {
+  if (!document.body) return;
+  const localeIndex = APP_LANGUAGE_CODES.indexOf(language);
+  const excluded = "#messages, #messages *, .message-content, .user-message, .history-item, pre, code, textarea, input, .studio-code-editor";
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+
+  for (const node of nodes) {
+    if (node.parentElement?.closest(excluded)) continue;
+    let state = uiOriginalText.get(node);
+    if (!state) {
+      state = { original: node.nodeValue, translated: null };
+      uiOriginalText.set(node, state);
+    } else if (node.nodeValue !== state.translated && node.nodeValue !== state.original) {
+      // The app reused this text node for a new dynamic UI label.
+      state.original = node.nodeValue;
+      state.translated = null;
+    }
+    const nextValue = translatePhrase(state.original, localeIndex);
+    if (node.nodeValue !== nextValue) node.nodeValue = nextValue;
+    state.translated = nextValue;
+  }
+
+  document.querySelectorAll("[placeholder], [title], [aria-label]").forEach(element => {
+    if (element.closest(excluded)) return;
+    let state = uiOriginalAttributes.get(element);
+    if (!state) {
+      state = {};
+      uiOriginalAttributes.set(element, state);
+    }
+    for (const attr of ["placeholder", "title", "aria-label"]) {
+      const current = element.getAttribute(attr);
+      if (current == null) continue;
+      if (!state[attr]) state[attr] = { original: current, translated: null };
+      const item = state[attr];
+      if (current !== item.translated && current !== item.original) {
+        item.original = current;
+        item.translated = null;
+      }
+      const nextValue = translatePhrase(item.original, localeIndex);
+      if (current !== nextValue) element.setAttribute(attr, nextValue);
+      item.translated = nextValue;
+    }
+  });
+  document.documentElement.lang = language;
+}
+
+let uiTranslationObserver = null;
+let uiTranslationQueued = false;
+function installUITranslations() {
+  translateUI();
+  if (uiTranslationObserver || !document.body) return;
+  uiTranslationObserver = new MutationObserver(() => {
+    if (uiTranslationQueued) return;
+    uiTranslationQueued = true;
+    queueMicrotask(() => {
+      uiTranslationQueued = false;
+      translateUI();
+    });
+  });
+  uiTranslationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+}
 let language = localStorage.getItem(STORAGE.language) || "ru-RU";
 if (language === "ru") language = "ru-RU";
 if (language === "en") language = "en-GB";
 if (!APP_LANGUAGE_CODES.includes(language)) language = "ru-RU";
-document.documentElement.lang = language;
 let recognition = null;
 let voiceActive = false;
 let voiceChatId = null;
@@ -66,7 +211,7 @@ let voicePlaybackResolve = null;
 let voiceBargeInRecognition = null;
 let voicePendingUtterance = "";
 let currentSpeechText = "";
-const SUPPORTED_VOICE_LANGUAGES = ["ru-RU", "kk-KZ", "en-GB", "fr-FR", "es-ES", "it-IT", "az-AZ", "zh-CN"];
+const SUPPORTED_VOICE_LANGUAGES = APP_LANGUAGE_CODES;
 let voiceLanguage = localStorage.getItem("pinsk_voice_language") || "ru-RU";
 if (!SUPPORTED_VOICE_LANGUAGES.includes(voiceLanguage)) voiceLanguage = "ru-RU";
 const VOICE_LANGUAGES = {
@@ -77,7 +222,9 @@ const VOICE_LANGUAGES = {
   "es-ES": "Испанский",
   "it-IT": "Итальянский",
   "az-AZ": "Азербайджанский",
-  "zh-CN": "Китайский (упрощённый)"
+  "zh-CN": "Китайский (упрощённый)",
+  "de-DE": "Немецкий",
+  "tr-TR": "Турецкий"
 };
 let selectedAnalysisFile = null;
 
@@ -387,225 +534,6 @@ async function api(url, options = {}) {
   }
 
   return data;
-}
-
-/* =========================================
-   ПОЛНАЯ ЛОКАЛИЗАЦИЯ ИНТЕРФЕЙСА
-   ========================================= */
-
-const UI_TRANSLATION_CACHE_PREFIX = "pinsk_ui_translations_v2_";
-const UI_TRANSLATABLE_ATTRIBUTES = ["placeholder", "title", "aria-label", "alt"];
-const UI_TRANSLATION_EXCLUDED = [
-  "script", "style", "noscript", "pre", "code",
-  "#messages", "#history", ".message", ".chat-message",
-  "#webSearchAnswer", "#webSearchResults", ".web-search-answer__text",
-  ".web-search-result__snippet", "#analysisResult", "#studioResult",
-  "#studioImageResult", "#profileName", ".avatar",
-  "[data-no-translate]", "[contenteditable='true']"
-].join(",");
-let uiTranslationObserver = null;
-let uiTranslationTimer = null;
-let uiTranslationRunning = false;
-let uiTranslationAgain = false;
-let uiTranslationApplying = false;
-
-function getUiTranslationCache() {
-  try {
-    return JSON.parse(localStorage.getItem(UI_TRANSLATION_CACHE_PREFIX + language) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function setUiTranslationCache(cache) {
-  try {
-    localStorage.setItem(UI_TRANSLATION_CACHE_PREFIX + language, JSON.stringify(cache));
-  } catch (error) {
-    console.warn("Pinsk UI translation cache:", error);
-  }
-}
-
-function shouldTranslateUiTextNode(node) {
-  const parent = node?.parentElement;
-  if (!parent || parent.closest(UI_TRANSLATION_EXCLUDED) || parent.closest("textarea, script, style, pre, code")) return false;
-  const value = String(node.nodeValue || "").trim();
-  return Boolean(value && /[А-Яа-яЁё]/.test(value) && value.length <= 320);
-}
-
-function collectUiTranslationTargets() {
-  const targets = [];
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let node;
-
-  while ((node = walker.nextNode())) {
-    if (!shouldTranslateUiTextNode(node)) continue;
-    if (node.__pinskOriginalText === undefined || (node.nodeValue !== node.__pinskLastTranslation && node.nodeValue !== node.__pinskOriginalText)) {
-      node.__pinskOriginalText = node.nodeValue;
-      node.__pinskLastTranslation = undefined;
-    }
-    const original = String(node.__pinskOriginalText || "").trim();
-    if (!original) continue;
-    targets.push({ type: "text", node, original });
-  }
-
-  document.querySelectorAll("body *").forEach(element => {
-    if (element.closest(UI_TRANSLATION_EXCLUDED)) return;
-    element.__pinskOriginalAttrs ||= {};
-    element.__pinskLastTranslatedAttrs ||= {};
-    UI_TRANSLATABLE_ATTRIBUTES.forEach(attribute => {
-      const value = element.getAttribute(attribute);
-      if (!value || !/[А-Яа-яЁё]/.test(value) || value.length > 320) return;
-      if (element.__pinskOriginalAttrs[attribute] === undefined || (value !== element.__pinskLastTranslatedAttrs[attribute] && value !== element.__pinskOriginalAttrs[attribute])) {
-        element.__pinskOriginalAttrs[attribute] = value;
-        element.__pinskLastTranslatedAttrs[attribute] = undefined;
-      }
-      const original = String(element.__pinskOriginalAttrs[attribute] || "").trim();
-      if (!original) return;
-      targets.push({ type: "attribute", element, attribute, original });
-    });
-  });
-
-  return targets;
-}
-
-function restoreOriginalUiText() {
-  uiTranslationApplying = true;
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    if (node.__pinskOriginalText !== undefined && node.nodeValue !== node.__pinskOriginalText) {
-      node.nodeValue = node.__pinskOriginalText;
-    }
-    node.__pinskLastTranslation = undefined;
-  }
-  document.querySelectorAll("body *").forEach(element => {
-    if (!element.__pinskOriginalAttrs) return;
-    Object.entries(element.__pinskOriginalAttrs).forEach(([attribute, value]) => {
-      if (element.getAttribute(attribute) !== value) {
-        if (value === null || value === undefined) element.removeAttribute(attribute);
-        else element.setAttribute(attribute, value);
-      }
-      if (element.__pinskLastTranslatedAttrs) element.__pinskLastTranslatedAttrs[attribute] = undefined;
-    });
-  });
-  uiTranslationApplying = false;
-}
-
-async function requestUiTranslations(texts) {
-  const result = {};
-  const cache = getUiTranslationCache();
-  const missing = [...new Set(texts)].filter(value => !(value in cache));
-
-  for (let offset = 0; offset < missing.length; offset += 40) {
-    const batch = missing.slice(offset, offset + 40);
-    const response = await api("/api/ui/translate", {
-      method: "POST",
-      body: JSON.stringify({ language, texts: batch })
-    });
-    const translations = Array.isArray(response.translations) ? response.translations : [];
-    batch.forEach((original, index) => {
-      const translated = typeof translations[index] === "string" ? translations[index].trim() : "";
-      if (translated) cache[original] = translated;
-    });
-  }
-
-  setUiTranslationCache(cache);
-  texts.forEach(original => {
-    if (cache[original]) result[original] = cache[original];
-  });
-  return result;
-}
-
-async function translateUiInterface(forceRestore = false) {
-  if (!document.body) return;
-  if (uiTranslationRunning) {
-    uiTranslationAgain = true;
-    return;
-  }
-
-  uiTranslationRunning = true;
-  try {
-    if (forceRestore) restoreOriginalUiText();
-    document.documentElement.lang = language;
-
-    if (language === "ru-RU") {
-      restoreOriginalUiText();
-      return;
-    }
-
-    const targets = collectUiTranslationTargets();
-    const originals = [...new Set(targets.map(target => target.original))];
-    const cache = getUiTranslationCache();
-    const missing = originals.filter(value => !(value in cache));
-    if (missing.length) await requestUiTranslations(missing);
-
-    const freshCache = getUiTranslationCache();
-    uiTranslationApplying = true;
-    targets.forEach(target => {
-      const translated = freshCache[target.original];
-      if (!translated) return;
-      if (target.type === "text") {
-        const leading = (target.node.__pinskOriginalText.match(/^\s*/) || [""])[0];
-        const trailing = (target.node.__pinskOriginalText.match(/\s*$/) || [""])[0];
-        const translatedNodeValue = leading + translated + trailing;
-        if (target.node.nodeValue !== translatedNodeValue) target.node.nodeValue = translatedNodeValue;
-        target.node.__pinskLastTranslation = translatedNodeValue;
-      } else {
-        if (target.element.getAttribute(target.attribute) !== translated) target.element.setAttribute(target.attribute, translated);
-        target.element.__pinskLastTranslatedAttrs ||= {};
-        target.element.__pinskLastTranslatedAttrs[target.attribute] = translated;
-      }
-    });
-    uiTranslationApplying = false;
-  } catch (error) {
-    uiTranslationApplying = false;
-    console.warn("Pinsk UI translation failed:", error);
-  } finally {
-    uiTranslationRunning = false;
-    if (uiTranslationAgain) {
-      uiTranslationAgain = false;
-      scheduleUiTranslation();
-    }
-  }
-}
-
-function scheduleUiTranslation(forceRestore = false) {
-  clearTimeout(uiTranslationTimer);
-  uiTranslationTimer = setTimeout(() => translateUiInterface(forceRestore), 180);
-}
-
-function installUiTranslationObserver() {
-  if (uiTranslationObserver || !document.body) return;
-  uiTranslationObserver = new MutationObserver(records => {
-    if (uiTranslationApplying) return;
-    for (const record of records) {
-      if (record.type === "characterData") {
-        const node = record.target;
-        if (node.__pinskLastTranslation !== undefined && node.nodeValue === node.__pinskLastTranslation) continue;
-        node.__pinskOriginalText = node.nodeValue;
-        node.__pinskLastTranslation = undefined;
-      } else if (record.type === "attributes") {
-        const element = record.target;
-        const attribute = record.attributeName;
-        const value = element.getAttribute(attribute);
-        element.__pinskOriginalAttrs ||= {};
-        element.__pinskLastTranslatedAttrs ||= {};
-        if (value !== element.__pinskLastTranslatedAttrs[attribute]) {
-          element.__pinskOriginalAttrs[attribute] = value;
-          element.__pinskLastTranslatedAttrs[attribute] = undefined;
-        }
-      }
-    }
-    scheduleUiTranslation();
-  });
-  uiTranslationObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    attributes: true,
-    attributeFilter: UI_TRANSLATABLE_ATTRIBUTES
-  });
-  scheduleUiTranslation();
 }
 
 /* =========================================
@@ -1001,7 +929,7 @@ function showProfile() {
   showModal(`
     <div class="profile-modal">
       <h2>Мой аккаунт</h2>
-      <h3 data-no-translate>${escapeHTML(currentUser.name)}</h3>
+      <h3>${escapeHTML(currentUser.name)}</h3>
       <p>${escapeHTML(currentUser.email)}</p>
       <p>Тариф: ${escapeHTML(role)}</p>
       ${role === "OWNER" ? "<p>Владелец Pinsk AI. Полный доступ без ограничений.</p>" : ""}
@@ -1352,7 +1280,6 @@ function renderAttachmentPreview() {
 
       image.src = url;
       image.alt = file.name;
-      image.setAttribute("data-no-translate", "true");
 
       item.appendChild(image);
     } else {
@@ -1368,7 +1295,6 @@ function renderAttachmentPreview() {
 
     const name = document.createElement("div");
     name.className = "pinsk-attachment-name";
-    name.setAttribute("data-no-translate", "true");
     name.textContent = file.name;
 
     const size = document.createElement("div");
@@ -1380,7 +1306,6 @@ function renderAttachmentPreview() {
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "pinsk-attachment-remove";
-    remove.setAttribute("data-no-translate", "true");
     remove.textContent = "×";
     remove.title = "Удалить файл";
     remove.setAttribute("aria-label", `Удалить файл ${file.name}`);
@@ -1725,8 +1650,12 @@ async function sendMessage(value, options = {}) {
 
       const answer = data.answer || "Нет ответа.";
 
-      // Pinsk now uses text-only chat; responses are never read aloud.
-      renderMessage("assistant", answer);
+      if (options.voiceSession) {
+        if (options.speak) await speakAnswer(answer);
+      } else {
+        renderMessage("assistant", answer);
+        if (options.speak) speakAnswer(answer);
+      }
 
       await loadUsage();
       if (!options.voiceSession) await loadHistory();
@@ -1836,10 +1765,7 @@ function getPageView() {
 function renderPage(page) {
   closeModal();
 
-  if (page === "voice") {
-    toast("Голосовой режим отключён. Используй обычный текстовый чат.");
-    page = "chat";
-  }
+  if (currentPage === "voice" && page !== "voice") stopVoice();
 
   if (page === "admin" && !isAdmin()) {
     toast("Доступ к админ-панели разрешён только владельцу.");
@@ -1860,6 +1786,7 @@ function renderPage(page) {
     plugins: "Плагины",
     analysis: "Анализ данных",
     studio: "Студия дизайна",
+    voice: "Голосовой режим",
     plans: "Тарифы",
     admin: "Админ-панель"
   };
@@ -1867,6 +1794,7 @@ function renderPage(page) {
   if ($("pageTitle")) $("pageTitle").textContent = titles[page] || "Pinsk AI";
 
   renderPageContent(page);
+  translateUI();
   $("sidebar")?.classList.remove("open");
   updateScrollToBottomButton();
 }
@@ -1902,7 +1830,7 @@ function renderPageContent(page) {
         <div class="dashboard-grid">
           <div class="dashboard-card">
             <h3>Аккаунт</h3>
-            <p data-no-translate>${escapeHTML(currentUser?.name || "Гость")}</p>
+            <p>${escapeHTML(currentUser?.name || "Гость")}</p>
             <p>${escapeHTML(currentUser?.role || "FREE")}</p>
           </div>
           <div class="dashboard-card">
@@ -2708,8 +2636,8 @@ function renderProjects() {
   container.innerHTML = projects.length
     ? projects.map(project => `
       <div class="dashboard-card">
-        <h3 data-no-translate>${escapeHTML(project.name)}</h3>
-        <p data-no-translate>${escapeHTML(project.description || "")}</p>
+        <h3>${escapeHTML(project.name)}</h3>
+        <p>${escapeHTML(project.description || "")}</p>
         <button class="secondary-button" data-delete-project="${escapeHTML(project.id)}">
           Удалить
         </button>
@@ -2759,8 +2687,8 @@ function renderLibrary() {
   container.innerHTML = library.length
     ? library.map(item => `
       <div class="dashboard-card">
-        <h3 data-no-translate>${escapeHTML(item.title)}</h3>
-        <p data-no-translate>${escapeHTML(item.content)}</p>
+        <h3>${escapeHTML(item.title)}</h3>
+        <p>${escapeHTML(item.content)}</p>
         <button class="secondary-button" data-delete-library="${escapeHTML(item.id)}">
           Удалить
         </button>
@@ -2906,8 +2834,8 @@ async function loadAdminUsers() {
 
     container.innerHTML = users.map(user => `
       <div class="dashboard-card">
-        <h3 data-no-translate>${escapeHTML(user.name)}</h3>
-        <p data-no-translate>${escapeHTML(user.email)}</p>
+        <h3>${escapeHTML(user.name)}</h3>
+        <p>${escapeHTML(user.email)}</p>
         <p>Тариф: ${escapeHTML(user.role)}</p>
         <p>Статус: ${user.is_blocked ? "Заблокирован" : "Активен"}</p>
       </div>
@@ -3284,11 +3212,11 @@ function showSettings() {
   showModal(`
     <h2>Настройки Pinsk</h2>
 
-    <label>Язык интерфейса и ответов Pinsk</label>
+    <label>Язык интерфейса и ответов</label>
     <select id="languageSelect">
       ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
-    <p class="settings-hint">Язык применяется ко всему интерфейсу Pinsk, ответам ИИ, генерации сайтов и описаниям изображений.</p>
+    <p class="settings-hint">Выбранный язык применяется к элементам интерфейса и ответам Pinsk. Перевод интерфейса работает локально и не зависит от Gemini.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3302,6 +3230,8 @@ function showSettings() {
   $("saveSettings").onclick = () => {
     language = $("languageSelect").value;
     localStorage.setItem(STORAGE.language, language);
+    voiceLanguage = language;
+    localStorage.setItem("pinsk_voice_language", voiceLanguage);
 
     localStorage.setItem(
       STORAGE.reasoning,
@@ -3309,9 +3239,7 @@ function showSettings() {
     );
 
     closeModal();
-    document.documentElement.lang = language;
-    renderPage(currentPage);
-    scheduleUiTranslation(true);
+    translateUI();
     toast("Настройки сохранены.");
   };
 }
@@ -4351,7 +4279,7 @@ async function init() {
   console.log("Pinsk AI: запуск...");
 
   installPinskUiFixes();
-  installUiTranslationObserver();
+  installUITranslations();
 
   // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
