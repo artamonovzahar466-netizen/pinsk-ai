@@ -1,5 +1,17 @@
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 :root {
   --bg: #101014;
   --sidebar: #17171d;
@@ -639,9 +651,9 @@ button {
 
 .composer-area {
   width: 100%;
-  max-width: 920px;
+  max-width: 850px;
   margin: 0 auto;
-  padding: 12px 25px 20px;
+  padding: 10px 25px 19px;
 }
 
 .composer {
@@ -650,8 +662,8 @@ button {
   width: 100%;
   border: 1px solid #41404e;
   background: #1d1d25;
-  border-radius: 24px;
-  padding: 15px 16px 12px;
+  border-radius: 17px;
+  padding: 11px 14px 10px;
   box-shadow: 0 10px 40px #00000020;
   transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
 }
@@ -664,18 +676,18 @@ button {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 48px;
-  max-height: 220px;
-  resize: vertical;
+  min-height: 32px;
+  max-height: 150px;
+  resize: none;
   overflow-y: auto;
   background: transparent;
   color: var(--text);
   border: 0;
   outline: 0;
-  padding: 5px 3px 12px;
+  padding: 5px 4px 7px;
   margin: 0;
-  line-height: 1.55;
-  font-size: 15px;
+  line-height: 1.5;
+  font-size: 14px;
   font-family: inherit;
   transition: min-height .18s ease;
 }
@@ -755,8 +767,8 @@ button {
 
 @media (max-width: 600px) {
   .composer-area { padding: 9px 10px 13px; }
-  .composer { border-radius: 21px; padding: 12px 12px 10px; }
-  .composer textarea { min-height: 44px; font-size: 14px; }
+  .composer { border-radius: 17px; padding: 10px 12px 9px; }
+  .composer textarea { min-height: 30px; font-size: 14px; }
   .composer-tools { gap: 8px; }
   .composer-left { gap: 6px; }
   .tool-button { min-height: 32px; padding: 6px 10px; font-size: 11px; }
