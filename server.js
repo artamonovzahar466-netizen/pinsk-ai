@@ -1,5 +1,33 @@
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 "use strict";
 
 const express = require("express");
@@ -2110,48 +2138,65 @@ async function askAI(messages) {
   const hasVisualInput = contents.some(message =>
     (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
   );
-  const requestModel = hasVisualInput
-    ? VISION_MODEL
-    : MODEL;
+  const isDesignRequest = /senior frontend-разработчик|исправляешь ответ генератора сайтов/i.test(systemText);
+  const requestModels = hasVisualInput
+    ? [VISION_MODEL]
+    : isDesignRequest
+      ? [...new Set([MODEL, process.env.GEMINI_DESIGN_FALLBACK_MODEL || "gemini-3.5-flash-lite"])]
+      : [MODEL];
 
   return executeWithKeyRotation(
     pool,
     async (apiKey, { signal }) => {
-      const response = await fetchGeminiWithRetry(
-        `https://generativelanguage.googleapis.com/v1beta/models/${requestModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            ...(systemText
-              ? {
-                  systemInstruction: {
-                    parts: [{ text: systemText }]
-                  }
-                }
-              : {}),
-            contents,
-            generationConfig: {
-              // Website source is much longer than a normal chat reply.
-              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 4096
+      const requestBody = JSON.stringify({
+        ...(systemText
+          ? {
+              systemInstruction: {
+                parts: [{ text: systemText }]
+              }
             }
-          }),
-          signal
+          : {}),
+        contents,
+        generationConfig: {
+          // Website source is much longer than a normal chat reply.
+          maxOutputTokens: isDesignRequest ? 8192 : 4096
         }
-      );
+      });
 
-      const data = await response.json().catch(() => ({}));
+      let response = null;
+      let data = {};
+      let usedModel = requestModels[0];
 
-      if (!response.ok) {
+      for (let modelIndex = 0; modelIndex < requestModels.length; modelIndex++) {
+        usedModel = requestModels[modelIndex];
+        response = await fetchGeminiWithRetry(
+          `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody,
+            signal
+          }
+        );
+        data = await response.json().catch(() => ({}));
+
+        const canTryFallback = !response.ok &&
+          [429, 502, 503, 504, 529].includes(response.status) &&
+          modelIndex < requestModels.length - 1;
+
+        if (canTryFallback) {
+          console.warn(`Gemini ${usedModel} временно недоступен (HTTP ${response.status}); пробую резервную модель ${requestModels[modelIndex + 1]}.`);
+          continue;
+        }
+        break;
+      }
+
+      if (!response?.ok) {
         const error = new Error(
           data?.error?.message ||
-          `Gemini API вернул HTTP ${response.status}`
+          `Gemini API вернул HTTP ${response?.status || 503}`
         );
-
-        error.status = response.status;
-
+        error.status = response?.status || 503;
         throw error;
       }
 
@@ -2184,121 +2229,6 @@ async function askAI(messages) {
 // Внешний TTS-провайдер и API-ключ для голосового режима не требуются.
 
 // ==========================================
-// UI TRANSLATION — LOCALIZE THE APPLICATION
-// ==========================================
-
-const uiTranslationRate = new Map();
-const UI_TRANSLATION_LANGUAGES = new Set([
-  "ru-RU", "en-GB", "kk-KZ", "zh-CN", "az-AZ",
-  "it-IT", "fr-FR", "es-ES", "de-DE", "tr-TR"
-]);
-
-app.post("/api/ui/translate", async (req, res) => {
-  try {
-    const ip = String(req.ip || req.socket?.remoteAddress || "unknown");
-    const now = Date.now();
-    const recent = (uiTranslationRate.get(ip) || []).filter(time => now - time < 10 * 60 * 1000);
-    if (recent.length >= 40) {
-      return res.status(429).json({ error: "Слишком много запросов перевода. Попробуй позже." });
-    }
-
-    const requestedLanguage = String(req.body?.language || "");
-    const texts = req.body?.texts;
-    if (!UI_TRANSLATION_LANGUAGES.has(requestedLanguage)) {
-      return res.status(400).json({ error: "Неподдерживаемый язык интерфейса." });
-    }
-    if (!Array.isArray(texts) || texts.length < 1 || texts.length > 40) {
-      return res.status(400).json({ error: "Некорректный список фраз для перевода." });
-    }
-
-    const cleanTexts = texts.map(value => String(value || "").trim());
-    if (cleanTexts.some(value => !value || value.length > 320)) {
-      return res.status(400).json({ error: "Одна из фраз имеет недопустимую длину." });
-    }
-
-    uiTranslationRate.set(ip, [...recent, now]);
-    if (uiTranslationRate.size > 2000) {
-      for (const [key, times] of uiTranslationRate) {
-        if (!times.some(time => now - time < 10 * 60 * 1000)) uiTranslationRate.delete(key);
-      }
-    }
-
-    if (requestedLanguage === "ru-RU") {
-      return res.json({ translations: cleanTexts });
-    }
-
-    const languageNames = {
-      "en-GB": "British English",
-      "kk-KZ": "Kazakh",
-      "zh-CN": "Simplified Chinese",
-      "az-AZ": "Azerbaijani",
-      "it-IT": "Italian",
-      "fr-FR": "French",
-      "es-ES": "Spanish",
-      "de-DE": "German",
-      "tr-TR": "Turkish"
-    };
-    const prompt = [
-      `Translate every item into ${languageNames[requestedLanguage]}.`,
-      "These are short UI labels and interface messages for a software application.",
-      "Return ONLY a valid JSON array of strings, in exactly the same order and with exactly the same number of items.",
-      "Do not translate user names, email addresses, URLs, file names, or content that is clearly user-provided.",
-      "Do not explain, do not add markdown fences, and do not omit or merge items.",
-      "Preserve numbers, punctuation, emoji, product names (Pinsk, Pinsk AI, Pinsk PRO), plan names (FREE, PRO, OWNER), and placeholders such as {name}, {count}, %s, IDs, and keyboard shortcuts.",
-      "Translate naturally for native users. Keep the meaning and level of formality consistent.",
-      "Source strings:",
-      JSON.stringify(cleanTexts)
-    ].join("\n");
-
-    const answer = await askAI([
-      { role: "system", content: "You are a professional software UI localization engine. Follow the requested JSON output format exactly." },
-      { role: "user", content: prompt }
-    ]);
-
-    let parsed = null;
-    for (let start = answer.indexOf("["); start !== -1; start = answer.indexOf("[", start + 1)) {
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      for (let i = start; i < answer.length; i++) {
-        const ch = answer[i];
-        if (inString) {
-          if (escaped) escaped = false;
-          else if (ch === "\\") escaped = true;
-          else if (ch === '"') inString = false;
-          continue;
-        }
-        if (ch === '"') inString = true;
-        else if (ch === "[") depth++;
-        else if (ch === "]" && --depth === 0) {
-          try {
-            const candidate = JSON.parse(answer.slice(start, i + 1));
-            if (Array.isArray(candidate)) parsed = candidate;
-          } catch (_) {}
-          break;
-        }
-      }
-      if (parsed) break;
-    }
-    if (!Array.isArray(parsed) || parsed.length !== cleanTexts.length) {
-      throw new Error("Модель вернула неполный перевод интерфейса.");
-    }
-    const translations = parsed.map((value, index) => {
-      const translated = typeof value === "string" ? value.trim() : "";
-      const originalTokens = cleanTexts[index].match(/\{[^{}]+\}|%[a-z]/gi) || [];
-      const translatedTokens = translated.match(/\{[^{}]+\}|%[a-z]/gi) || [];
-      const tokensMatch = originalTokens.length === translatedTokens.length && originalTokens.every(token => translatedTokens.includes(token));
-      return translated && translated.length <= 500 && tokensMatch ? translated : cleanTexts[index];
-    });
-
-    return res.json({ translations });
-  } catch (error) {
-    console.error("Pinsk UI translation error:", error);
-    return res.status(503).json({ error: "Не удалось перевести интерфейс. Попробуй ещё раз." });
-  }
-});
-
-// ==========================================
 // CHAT WITH FILES AND IMAGES
 // ==========================================
 
@@ -2329,9 +2259,7 @@ app.post(
         "es-ES": "испанском",
         "it-IT": "итальянском",
         "az-AZ": "азербайджанском",
-        "zh-CN": "китайском (упрощённом)",
-        "de-DE": "немецком",
-        "tr-TR": "турецком"
+        "zh-CN": "китайском (упрощённый)",
       };
       const requestedVoiceLanguage = String(req.body.voiceLanguage || req.body.language || "ru-RU");
       const requestedResponseLanguage = isVoiceMode
@@ -2963,6 +2891,36 @@ app.post(
 );
 
 
+// Извлекает первый полный JSON-объект, не путая фигурные скобки внутри строк.
+function extractJsonObject(value) {
+  const text = String(value ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (start === -1) {
+      if (char === "{") { start = i; depth = 1; }
+      continue;
+    }
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) {
+      const candidate = text.slice(start, i + 1);
+      try { return JSON.parse(candidate); }
+      catch (error) { throw new Error("JSON проекта повреждён: " + error.message); }
+    }
+  }
+  throw new Error("Полный JSON-объект проекта не найден в ответе ИИ.");
+}
+
 // ==========================================
 // DESIGN STUDIO — WEBSITE GENERATION
 // ==========================================
@@ -3004,7 +2962,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
           "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
           designLanguageInstruction + " " +
           "Создавай законченные, адаптивные, визуально качественные сайты. " +
-          "Верни строго один валидный JSON-объект без Markdown и пояснений, с ключами html, css, js. Все три ключа обязательны; если стили или скрипты не нужны, верни пустую строку. Не оборачивай JSON в массив. " +
+          "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
           "html — только содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
           "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
           "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
@@ -3017,43 +2975,27 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     ]);
 
-    // Gemini иногда добавляет Markdown, пояснения или фигурные скобки внутри
-    // строк. Извлекаем первый полноценный JSON-объект сбалансированным сканером.
-    function parseDesignProject(raw) {
-      const source = String(raw || "").trim();
-      const candidates = [source, source.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim()];
-      for (const candidate of candidates) {
-        for (let start = candidate.indexOf("{"); start !== -1; start = candidate.indexOf("{", start + 1)) {
-          let depth = 0;
-          let inString = false;
-          let escaped = false;
-          for (let i = start; i < candidate.length; i++) {
-            const ch = candidate[i];
-            if (inString) {
-              if (escaped) escaped = false;
-              else if (ch === "\\") escaped = true;
-              else if (ch === '"') inString = false;
-              continue;
-            }
-            if (ch === '"') inString = true;
-            else if (ch === "{") depth++;
-            else if (ch === "}" && --depth === 0) {
-              try {
-                const value = JSON.parse(candidate.slice(start, i + 1));
-                if (value && typeof value === "object" && !Array.isArray(value)) return value;
-              } catch (_) {}
-              break;
-            }
-          }
+    let generated;
+    try {
+      generated = extractJsonObject(answer);
+    } catch (parseError) {
+      console.warn("Design Studio: malformed JSON; requesting one corrected project response:", parseError.message);
+      const repairedAnswer = await askAI([
+        {
+          role: "system",
+          content: "Ты исправляешь ответ генератора сайтов. Верни строго один валидный JSON-объект без Markdown и пояснений. Обязательные строковые ключи: html, css, js. Сохрани исходный замысел и весь функционал. Экранируй кавычки и переносы строк по правилам JSON."
+        },
+        {
+          role: "user",
+          content: "Исходное задание:\n" + prompt + "\n\nПредыдущий некорректный ответ:\n" + String(answer).slice(0, 30000) + "\n\nВерни исправленный полный JSON-проект."
         }
-      }
-      throw new Error("ИИ вернул ответ, который не удалось разобрать как JSON-проект. Попробуй повторить запрос.");
+      ]);
+      generated = extractJsonObject(repairedAnswer);
     }
 
-    const generated = parseDesignProject(answer);
-    const html = String(generated.html || generated.body || generated.code?.html || "").slice(0, 120000);
-    const css = String(generated.css || generated.styles || generated.code?.css || "").slice(0, 120000);
-    const js = String(generated.js || generated.script || generated.code?.js || "").slice(0, 120000);
+    const html = String(generated.html ?? generated.body ?? generated.code?.html ?? "").slice(0, 120000);
+    const css = String(generated.css ?? generated.styles ?? generated.code?.css ?? "").slice(0, 120000);
+    const js = String(generated.js ?? generated.script ?? generated.code?.js ?? "").slice(0, 120000);
 
     if (!html.trim()) {
       throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
@@ -3067,11 +3009,13 @@ app.post("/api/design/generate", auth, async (req, res) => {
       await releaseMessage(req.user.id).catch(() => {});
     }
 
-    const status = [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
+    const status = error.code === "NO_AVAILABLE_GEMINI_KEYS" || [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
     return res.status(status).json({
-      error: status === 503
-        ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Это не означает, что API-ключи недействительны. Сервер автоматически повторил запрос; попробуй ещё раз через минуту."
-        : error.message || "Не удалось создать сайт. Попробуй изменить описание."
+      error: error.code === "NO_AVAILABLE_GEMINI_KEYS"
+        ? "Сейчас нет доступных Gemini API-ключей: все ключи временно заняты, исчерпали квоту или находятся на паузе. Генерация сайтов возобновится, когда появится доступный ключ."
+        : status === 503
+          ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Сервер уже выполнил повторные попытки. Попробуй позже."
+          : error.message || "Не удалось создать сайт. Попробуй изменить описание."
     });
   }
 });
@@ -3278,4 +3222,5 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
 
