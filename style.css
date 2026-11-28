@@ -1210,58 +1210,40 @@ button {
 .composer textarea { min-height: 64px; max-height: 260px; }
 
 
-/* CHAT + COMPOSER: переписка и поле ввода как единый чат. */
+/* CHAT + COMPOSER: убираем верхнюю чёрную линию, не меняя само поле ввода. */
 .main:has(.workspace) .workspace {
-  width: 100%;
-  max-width: 100%;
-  min-height: 0;
-  padding: 35px 28px 0;
-  background: var(--bg);
+  max-width: 1280px;
+  padding-bottom: 0;
+  border-bottom: 0 !important;
+  box-shadow: none !important;
 }
-
-.main:has(.composer-area) .messages {
-  width: 100%;
-  max-width: 760px;
-  margin-left: auto;
-  margin-right: auto;
-  padding-bottom: 12px;
-}
-
 .main:has(.composer-area) .composer-area {
-  flex: 0 0 auto;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-  padding: 8px 28px 16px;
   border: 0 !important;
   border-top: 0 !important;
+  outline: 0 !important;
   box-shadow: none !important;
-  background: var(--bg) !important;
+  background: transparent !important;
+  margin-top: -1px;
+  padding-top: 6px;
 }
-
-.main:has(.composer-area) .composer {
-  width: 100%;
-  max-width: 760px;
-  margin: 0 auto;
-}
-
-.main:has(.composer-area) .disclaimer {
-  width: 100%;
-  max-width: 760px;
-  margin: 8px auto 0;
-  text-align: center;
-}
-
-.main:has(.composer-area) .composer-area::before {
+.main:has(.composer-area) .composer-area::before,
+.main:has(.composer-area) .composer-area::after {
   content: none !important;
   display: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
-
-@media (max-width: 900px) {
-  .main:has(.workspace) .workspace {
-    padding: 20px 15px 0;
-  }
-  .main:has(.composer-area) .composer-area {
-    padding: 8px 15px 13px;
+/* Расширяем именно область сообщений; ширина поля ввода остаётся прежней. */
+.main:has(.messages) .messages {
+  width: 100%;
+}
+.main:has(.messages) .assistant-message .message-content {
+  max-width: 96%;
+}
+@media (min-width: 900px) {
+  .main:has(.messages) .workspace {
+    max-width: 1280px;
+    padding-left: 36px;
+    padding-right: 36px;
   }
 }
