@@ -1,11 +1,15 @@
 
+
 "use strict";
 
 const crypto = require("crypto");
 
 const LEASE_MS = 35000;
 const HEARTBEAT_MS = 15000;
-const KEY_WAIT_MS = 12000;
+// Ключ может быть занят параллельным запросом до истечения LEASE_MS (35 секунд).
+// Ждём дольше lease, иначе чат/Design Studio ошибочно получают NO_AVAILABLE_GEMINI_KEYS.
+// Do not hold short chat requests for tens of seconds waiting on a leased key.
+const KEY_WAIT_MS = 2500;
 const KEY_WAIT_INTERVAL_MS = 400;
 const MAX_ATTEMPTS = 5;
 const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
@@ -563,9 +567,15 @@ function wait(ms) {
 async function waitForAvailableKey(
   db,
   excludedIds,
-  startedAt
+  startedAt,
+  signal = null
 ) {
   while (Date.now() - startedAt < KEY_WAIT_MS) {
+    if (signal?.aborted) {
+      const error = new Error("Запрос остановлен пользователем.");
+      error.name = "AbortError";
+      throw error;
+    }
     const key = await getNextApiKey(
       db,
       excludedIds
@@ -573,7 +583,19 @@ async function waitForAvailableKey(
 
     if (key) return key;
 
-    await wait(KEY_WAIT_INTERVAL_MS);
+    if (signal) {
+      await new Promise(resolve => {
+        const timer = setTimeout(done, KEY_WAIT_INTERVAL_MS);
+        function done() {
+          signal.removeEventListener("abort", done);
+          clearTimeout(timer);
+          resolve();
+        }
+        signal.addEventListener("abort", done, { once: true });
+      });
+    } else {
+      await wait(KEY_WAIT_INTERVAL_MS);
+    }
   }
 
   return null;
@@ -605,30 +627,47 @@ async function executeWithKeyRotation(
   );
 
   const startedAt = Date.now();
+  const externalSignal = options.signal;
+  const makeAbortError = () => {
+    const error = new Error("Запрос остановлен пользователем.");
+    error.name = "AbortError";
+    return error;
+  };
+  const throwIfAborted = () => {
+    if (externalSignal?.aborted) throw makeAbortError();
+  };
 
   let lastError = null;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
+    throwIfAborted();
     let key = await getNextApiKey(
       db,
       [...excludedIds]
     );
 
+    throwIfAborted();
+
     if (!key && attempts === 0) {
       key = await waitForAvailableKey(
         db,
         [...excludedIds],
-        startedAt
+        startedAt,
+        externalSignal
       );
     }
 
+    throwIfAborted();
     if (!key) break;
 
     attempts += 1;
     excludedIds.add(Number(key.id));
 
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (externalSignal?.aborted) controller.abort();
+    else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
     const heartbeat = setInterval(async () => {
       try {
@@ -673,6 +712,17 @@ async function executeWithKeyRotation(
       return result;
 
     } catch (error) {
+      if (externalSignal?.aborted) {
+        await recordKeyResultAndRelease(
+          db,
+          key.id,
+          key.leaseToken,
+          { success: true }
+        );
+        finished = true;
+        throw makeAbortError();
+      }
+
       lastError = error;
 
       const status = getErrorStatus(error);
@@ -754,6 +804,7 @@ async function executeWithKeyRotation(
 
     } finally {
       clearInterval(heartbeat);
+      externalSignal?.removeEventListener("abort", abortFromCaller);
 
       if (!finished) {
         try {
