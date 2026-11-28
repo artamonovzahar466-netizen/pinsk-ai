@@ -1795,7 +1795,7 @@ function renderPageContent(page) {
 
   if (welcome) welcome.style.display = "none";
   if (messages) messages.style.display = "none";
-  if (composer) composer.style.display = "none";
+  if (composer) composer.style.setProperty("display", "none", "important");
 
   view.style.display = "block";
 
