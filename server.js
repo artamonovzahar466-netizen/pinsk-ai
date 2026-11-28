@@ -1,33 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -69,20 +41,11 @@ const CLOUDFLARE_ACCOUNT_ID =
 const OWNER_EMAIL = "artamonovzahar466@gmail.com".toLowerCase();
 const LIMITED_OWNER_EMAIL = "artomov.sergeij@gmail.com".toLowerCase();
 
-// Gemini 503/UNAVAILABLE means temporary model capacity pressure, not an invalid key.
-// Retry a few times with exponential backoff before key rotation gives up.
+// Gemini key rotation already retries with other keys. Avoid stacking a second
+// exponential retry loop here, which could add many seconds to one chat request.
 async function fetchGeminiWithRetry(url, options) {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const response = await fetch(url, options);
-    if (![429, 502, 503, 504].includes(response.status) || attempt === 3) {
-      return response;
-    }
-    const delay = Math.min(1000 * (2 ** attempt), 8000) + Math.floor(Math.random() * 350);
-    console.warn(`Gemini временно недоступен (HTTP ${response.status}); повтор ${attempt + 1}/3 через ${delay} мс.`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-  }
+  return fetch(url, options);
 }
-
 const AI_LANGUAGE_NAMES = {
   "ru-RU": "русском языке",
   "kk-KZ": "казахском языке",
@@ -91,9 +54,7 @@ const AI_LANGUAGE_NAMES = {
   "es-ES": "испанском языке",
   "it-IT": "итальянском языке",
   "az-AZ": "азербайджанском языке",
-  "zh-CN": "упрощённом китайском языке",
-  "de-DE": "немецком языке",
-  "tr-TR": "турецком языке"
+  "zh-CN": "упрощённом китайском языке"
 };
 
 if (!process.env.DATABASE_URL) {
@@ -2138,65 +2099,48 @@ async function askAI(messages) {
   const hasVisualInput = contents.some(message =>
     (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
   );
-  const isDesignRequest = /senior frontend-разработчик|исправляешь ответ генератора сайтов/i.test(systemText);
-  const requestModels = hasVisualInput
-    ? [VISION_MODEL]
-    : isDesignRequest
-      ? [...new Set([MODEL, process.env.GEMINI_DESIGN_FALLBACK_MODEL || "gemini-3.5-flash-lite"])]
-      : [MODEL];
+  const requestModel = hasVisualInput
+    ? VISION_MODEL
+    : MODEL;
 
   return executeWithKeyRotation(
     pool,
     async (apiKey, { signal }) => {
-      const requestBody = JSON.stringify({
-        ...(systemText
-          ? {
-              systemInstruction: {
-                parts: [{ text: systemText }]
-              }
+      const response = await fetchGeminiWithRetry(
+        `https://generativelanguage.googleapis.com/v1beta/models/${requestModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ...(systemText
+              ? {
+                  systemInstruction: {
+                    parts: [{ text: systemText }]
+                  }
+                }
+              : {}),
+            contents,
+            generationConfig: {
+              // Website source is much longer than a normal chat reply.
+              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 2048
             }
-          : {}),
-        contents,
-        generationConfig: {
-          // Website source is much longer than a normal chat reply.
-          maxOutputTokens: isDesignRequest ? 8192 : 4096
+          }),
+          signal
         }
-      });
+      );
 
-      let response = null;
-      let data = {};
-      let usedModel = requestModels[0];
+      const data = await response.json().catch(() => ({}));
 
-      for (let modelIndex = 0; modelIndex < requestModels.length; modelIndex++) {
-        usedModel = requestModels[modelIndex];
-        response = await fetchGeminiWithRetry(
-          `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: requestBody,
-            signal
-          }
-        );
-        data = await response.json().catch(() => ({}));
-
-        const canTryFallback = !response.ok &&
-          [429, 502, 503, 504, 529].includes(response.status) &&
-          modelIndex < requestModels.length - 1;
-
-        if (canTryFallback) {
-          console.warn(`Gemini ${usedModel} временно недоступен (HTTP ${response.status}); пробую резервную модель ${requestModels[modelIndex + 1]}.`);
-          continue;
-        }
-        break;
-      }
-
-      if (!response?.ok) {
+      if (!response.ok) {
         const error = new Error(
           data?.error?.message ||
-          `Gemini API вернул HTTP ${response?.status || 503}`
+          `Gemini API вернул HTTP ${response.status}`
         );
-        error.status = response?.status || 503;
+
+        error.status = response.status;
+
         throw error;
       }
 
@@ -2246,6 +2190,9 @@ app.post(
 
     try {
       const message = String(req.body.message || "").trim();
+
+      const isQuickGreeting = files.length === 0 && message.length <= 80 &&
+        /^(привет|здравствуй(?:те)?|доброе утро|добрый день|добрый вечер|сәлем|салем|салам|hello|hi|hey|good morning|good evening|bonjour|hola|ciao|hallo|merhaba|你好|спасибо|благодарю|thanks|thank you)[!,.?\s]*$/iu.test(message);
 
       const conversationId = String(
         req.body.conversationId || crypto.randomUUID()
@@ -2447,18 +2394,20 @@ app.post(
         FROM messages
         WHERE conversation_id = $1
         ORDER BY id DESC
-        LIMIT 15
+        LIMIT ${isQuickGreeting ? 4 : 8}
       `, [conversationId]);
 
       const recentMessages = recentResult.rows.reverse();
 
-      const memoryResult = await pool.query(`
-        SELECT content
-        FROM memories
-        WHERE user_id = $1
-        ORDER BY id DESC
-        LIMIT 30
-      `, [userId]);
+      const memoryResult = isQuickGreeting
+        ? { rows: [] }
+        : await pool.query(`
+            SELECT content
+            FROM memories
+            WHERE user_id = $1
+            ORDER BY id DESC
+            LIMIT 30
+          `, [userId]);
 
       const context = memoryResult.rows
         .map(item => item.content)
@@ -2489,11 +2438,8 @@ app.post(
         }
       }
 
-      const answer = await askAI([
-        {
-          role: "system",
-          content:
-            "Ты Pinsk — интеллектуальный ИИ-ассистент. " +
+      const fullSystemPrompt =
+        "Ты Pinsk — интеллектуальный ИИ-ассистент. " +
             responseLanguageInstruction + "\n\n" +
             (voiceLanguageInstruction ? voiceLanguageInstruction + "\n\n" : "") +
             "Отвечай полезно, точно, естественно и на языке пользователя. " +
@@ -2553,7 +2499,21 @@ app.post(
             "и сохранённую память, если они относятся к вопросу. Пиши понятно и по делу, " +
             "при необходимости используй списки и пошаговые инструкции.\n\n" +
 
-            "ПАМЯТЬ:\n" + context.slice(0, 10000)
+            "ПАМЯТЬ:\n" + context.slice(0, 10000);
+
+      const compactSystemPrompt =
+        "Ты Pinsk — быстрый и полезный ИИ-ассистент. " +
+        responseLanguageInstruction + "\n\n" +
+        (voiceLanguageInstruction ? voiceLanguageInstruction + "\n\n" : "") +
+        "Отвечай прямо на вопрос, естественно и по делу. " +
+        "Не выдумывай факты; если не уверен — скажи об этом. " +
+        "Учитывай историю переписки и сохранённую память, когда они относятся к запросу." +
+        (context ? "\n\nКонтекст памяти пользователя:\n" + context.slice(0, 3000) : "");
+
+      const answer = await askAI([
+        {
+          role: "system",
+          content: files.length > 0 ? fullSystemPrompt : compactSystemPrompt
         },
         ...history
       ]);
@@ -2891,36 +2851,6 @@ app.post(
 );
 
 
-// Извлекает первый полный JSON-объект, не путая фигурные скобки внутри строк.
-function extractJsonObject(value) {
-  const text = String(value ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (start === -1) {
-      if (char === "{") { start = i; depth = 1; }
-      continue;
-    }
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') inString = true;
-    else if (char === "{") depth++;
-    else if (char === "}" && --depth === 0) {
-      const candidate = text.slice(start, i + 1);
-      try { return JSON.parse(candidate); }
-      catch (error) { throw new Error("JSON проекта повреждён: " + error.message); }
-    }
-  }
-  throw new Error("Полный JSON-объект проекта не найден в ответе ИИ.");
-}
-
 // ==========================================
 // DESIGN STUDIO — WEBSITE GENERATION
 // ==========================================
@@ -2977,25 +2907,21 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
     let generated;
     try {
-      generated = extractJsonObject(answer);
-    } catch (parseError) {
-      console.warn("Design Studio: malformed JSON; requesting one corrected project response:", parseError.message);
-      const repairedAnswer = await askAI([
-        {
-          role: "system",
-          content: "Ты исправляешь ответ генератора сайтов. Верни строго один валидный JSON-объект без Markdown и пояснений. Обязательные строковые ключи: html, css, js. Сохрани исходный замысел и весь функционал. Экранируй кавычки и переносы строк по правилам JSON."
-        },
-        {
-          role: "user",
-          content: "Исходное задание:\n" + prompt + "\n\nПредыдущий некорректный ответ:\n" + String(answer).slice(0, 30000) + "\n\nВерни исправленный полный JSON-проект."
-        }
-      ]);
-      generated = extractJsonObject(repairedAnswer);
+      const cleaned = String(answer)
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      const start = cleaned.indexOf("{");
+      const end = cleaned.lastIndexOf("}");
+      if (start < 0 || end <= start) throw new Error("JSON not found");
+      generated = JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
     }
 
-    const html = String(generated.html ?? generated.body ?? generated.code?.html ?? "").slice(0, 120000);
-    const css = String(generated.css ?? generated.styles ?? generated.code?.css ?? "").slice(0, 120000);
-    const js = String(generated.js ?? generated.script ?? generated.code?.js ?? "").slice(0, 120000);
+    const html = String(generated.html || "").slice(0, 120000);
+    const css = String(generated.css || "").slice(0, 120000);
+    const js = String(generated.js || "").slice(0, 120000);
 
     if (!html.trim()) {
       throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
@@ -3009,13 +2935,11 @@ app.post("/api/design/generate", auth, async (req, res) => {
       await releaseMessage(req.user.id).catch(() => {});
     }
 
-    const status = error.code === "NO_AVAILABLE_GEMINI_KEYS" || [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
+    const status = [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
     return res.status(status).json({
-      error: error.code === "NO_AVAILABLE_GEMINI_KEYS"
-        ? "Сейчас нет доступных Gemini API-ключей: все ключи временно заняты, исчерпали квоту или находятся на паузе. Генерация сайтов возобновится, когда появится доступный ключ."
-        : status === 503
-          ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Сервер уже выполнил повторные попытки. Попробуй позже."
-          : error.message || "Не удалось создать сайт. Попробуй изменить описание."
+      error: status === 503
+        ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Это не означает, что API-ключи недействительны. Сервер автоматически повторил запрос; попробуй ещё раз через минуту."
+        : error.message || "Не удалось создать сайт. Попробуй изменить описание."
     });
   }
 });
@@ -3222,5 +3146,4 @@ async function shutdown(signal) {
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
-
 
