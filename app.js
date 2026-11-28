@@ -1788,7 +1788,7 @@ function renderPageContent(page) {
 
     if (welcome) welcome.style.display = currentChatId ? "none" : "";
     if (messages) messages.style.display = "flex";
-    if (composer) composer.style.display = "";
+    if (composer) composer.style.setProperty("display", "block", "important");
 
     return;
   }
