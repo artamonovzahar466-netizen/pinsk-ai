@@ -1303,6 +1303,19 @@ function updateScrollToBottomButton() {
   const container = getChatScrollContainer();
   if (!button || !container) return;
 
+  // Привязываем стрелку именно к верхнему краю текстового поля,
+  // а не к окну браузера или всей панели инструментов.
+  const prompt = $("prompt");
+  const target = prompt || $("chatForm");
+  if (target) {
+    const rect = target.getBoundingClientRect();
+    const shiftRight = window.matchMedia("(max-width: 700px)").matches ? 10 : 16;
+    button.style.left = `${rect.left + rect.width / 2 + shiftRight}px`;
+    button.style.right = "auto";
+    // Нижний край стрелки находится немного выше верхнего края поля.
+    button.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 8)}px`;
+  }
+
   const distanceToBottom =
     container.scrollHeight - container.scrollTop - container.clientHeight;
   const chatIsActive = currentPage === "chat";
@@ -3548,7 +3561,7 @@ function installPinskUiFixes() {
     .pinsk-scroll-bottom {
       position: fixed;
       z-index: 1200;
-      left: calc(50% + 18px);
+      left: 50%;
       right: auto;
       bottom: 124px;
       width: 40px;
@@ -4306,7 +4319,7 @@ function installPinskUiFixes() {
       }
 
       .pinsk-scroll-bottom {
-        left: calc(50% + 14px);
+        left: 50%;
         right: auto;
         bottom: 108px;
         width: 38px;
@@ -4349,6 +4362,7 @@ function installPinskUiFixes() {
     scrollContainer.addEventListener("scroll", updateScrollToBottomButton, { passive: true });
   }
 
+  window.addEventListener("resize", updateScrollToBottomButton, { passive: true });
   updateScrollToBottomButton();
 }
 
