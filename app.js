@@ -4365,6 +4365,64 @@ function installPinskUiFixes() {
         max-width: none !important;
       }
     }
+
+    /* ПЛАВАЮЩЕЕ ПОЛЕ ВВОДА: внешний footer остаётся прозрачным,
+       а сама форма становится отдельной узкой карточкой по центру. */
+    .main:has(#composerArea) > #composerArea,
+    .main:has(.composer-area) > .composer-area {
+      display: block !important;
+      flex: 0 0 auto !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      margin: 0 !important;
+      padding: 8px 20px 18px !important;
+      background: transparent !important;
+      border: 0 !important;
+      border-top: 0 !important;
+      box-shadow: none !important;
+      box-sizing: border-box !important;
+    }
+
+    .main:has(#composerArea) > #composerArea > #chatForm,
+    .main:has(.composer-area) > .composer-area > .composer {
+      display: flex !important;
+      width: min(760px, 100%) !important;
+      max-width: 760px !important;
+      margin: 0 auto !important;
+      padding: 13px 15px 11px !important;
+      border: 1px solid #41404e !important;
+      border-radius: 23px !important;
+      background: #1d1d25 !important;
+      box-shadow: 0 12px 38px #00000038 !important;
+      box-sizing: border-box !important;
+    }
+
+    .main:has(#composerArea) > #composerArea > #chatForm:focus-within,
+    .main:has(.composer-area) > .composer-area > .composer:focus-within {
+      border-color: #7868c3 !important;
+      box-shadow: 0 0 0 3px #7868c31c, 0 14px 42px #00000045 !important;
+    }
+
+    .main:has(#composerArea) > #composerArea > .disclaimer,
+    .main:has(.composer-area) > .composer-area > .disclaimer {
+      width: min(760px, 100%) !important;
+      max-width: 760px !important;
+      margin: 8px auto 0 !important;
+      background: transparent !important;
+    }
+
+    @media (max-width: 600px) {
+      .main:has(#composerArea) > #composerArea,
+      .main:has(.composer-area) > .composer-area {
+        padding: 8px 10px 13px !important;
+      }
+
+      .main:has(#composerArea) > #composerArea > #chatForm,
+      .main:has(.composer-area) > .composer-area > .composer {
+        width: 100% !important;
+        border-radius: 20px !important;
+      }
+    }
   `;
 
   document.head.appendChild(style);
