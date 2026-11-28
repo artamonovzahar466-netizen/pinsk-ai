@@ -2149,6 +2149,17 @@ async function askAI(messages) {
         .join("\n")
         .trim();
 
+      if (/senior frontend-разработчик/i.test(systemText)) {
+        console.warn("Design Studio Gemini diagnostics:", JSON.stringify({
+          model: requestModel,
+          finishReason: candidate?.finishReason || null,
+          promptFeedback: data?.promptFeedback || null,
+          usageMetadata: data?.usageMetadata || null,
+          textLength: answer.length,
+          textPreview: answer.slice(0, 700)
+        }));
+      }
+
       if (!answer) {
         const reason = candidate?.finishReason;
 
@@ -2981,7 +2992,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
         if (inString) {
           if (escaped) {
             escaped = false;
-          } else if (char === "\\\\") {
+          } else if (char === "\\") {
             escaped = true;
           } else if (char === '"') {
             inString = false;
