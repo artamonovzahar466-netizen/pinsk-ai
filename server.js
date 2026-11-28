@@ -1997,7 +1997,8 @@ app.delete("/api/memory/:id", auth, async (req, res) => {
 });
 
 
-// ==========================================
+
+ // ==========================================
 // GEMINI API
 // ==========================================
 
@@ -2029,34 +2030,67 @@ function convertToGeminiContents(messages) {
         if (item.type === "file_data") {
           const url = String(item.file_data?.url || "").trim();
           const match = url.match(/^data:(application\/pdf);base64,([\s\S]+)$/i);
-          if (!match) return { text: "[PDF не удалось обработать: неверный формат данных]" };
-          const data = match[2].replace(/\s+/g, "");
-          if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 === 1) {
-            return { text: "[PDF не удалось обработать: повреждённые данные]" };
+
+          if (!match) {
+            return {
+              text: "[PDF не удалось обработать: неверный формат данных]"
+            };
           }
-          return { inlineData: { mimeType: "application/pdf", data } };
+
+          const data = match[2].replace(/\s+/g, "");
+
+          if (
+            !data ||
+            !/^[A-Za-z0-9+/]*={0,2}$/.test(data) ||
+            data.length % 4 === 1
+          ) {
+            return {
+              text: "[PDF не удалось обработать: повреждённые данные]"
+            };
+          }
+
+          return {
+            inlineData: {
+              mimeType: "application/pdf",
+              data
+            }
+          };
         }
 
         if (item.type === "image_url") {
           const url = String(item.image_url?.url || "").trim();
-          const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/i);
+          const match = url.match(
+            /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/i
+          );
 
           if (!match) {
-            return { text: "[Изображение не удалось обработать: неверный формат данных]" };
+            return {
+              text: "[Изображение не удалось обработать: неверный формат данных]"
+            };
           }
 
           let mimeType = match[1].toLowerCase();
+
           if (mimeType === "image/jpg" || mimeType === "image/pjpeg") {
             mimeType = "image/jpeg";
           }
 
           if (!supportedImageTypes.has(mimeType)) {
-            return { text: "[Изображение не удалось обработать: формат не поддерживается]" };
+            return {
+              text: "[Изображение не удалось обработать: формат не поддерживается]"
+            };
           }
 
           const data = match[2].replace(/\s+/g, "");
-          if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 === 1) {
-            return { text: "[Изображение не удалось обработать: повреждённые данные]" };
+
+          if (
+            !data ||
+            !/^[A-Za-z0-9+/]*={0,2}$/.test(data) ||
+            data.length % 4 === 1
+          ) {
+            return {
+              text: "[Изображение не удалось обработать: повреждённые данные]"
+            };
           }
 
           return {
@@ -2091,14 +2125,24 @@ async function askAI(messages) {
     throw new Error("Нет сообщений для отправки в Gemini.");
   }
 
-  // Image/PDF input requires a multimodal Gemini model. Do not send visual
-  // attachments to a text-only or lightweight model selected for chat.
+  // Image/PDF input requires a multimodal Gemini model.
   const hasVisualInput = contents.some(message =>
-    (message.parts || []).some(part => Boolean(part.inlineData || part.fileData))
+    (message.parts || []).some(part =>
+      Boolean(part.inlineData || part.fileData)
+    )
   );
+
   const requestModel = hasVisualInput
     ? VISION_MODEL
     : MODEL;
+
+  // Detect Design Studio requests.
+  const isDesignStudio =
+    /senior frontend-разработчик/i.test(systemText);
+
+  // Design Studio gets a larger output allowance.
+  // Normal chat keeps its previous limit.
+  const maxOutputTokens = isDesignStudio ? 16384 : 2048;
 
   return executeWithKeyRotation(
     pool,
@@ -2120,8 +2164,7 @@ async function askAI(messages) {
               : {}),
             contents,
             generationConfig: {
-              // Website source is much longer than a normal chat reply.
-              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 2048
+              maxOutputTokens
             }
           }),
           signal
@@ -2137,7 +2180,6 @@ async function askAI(messages) {
         );
 
         error.status = response.status;
-
         throw error;
       }
 
@@ -2149,15 +2191,19 @@ async function askAI(messages) {
         .join("\n")
         .trim();
 
-      if (/senior frontend-разработчик/i.test(systemText)) {
-        console.warn("Design Studio Gemini diagnostics:", JSON.stringify({
-          model: requestModel,
-          finishReason: candidate?.finishReason || null,
-          promptFeedback: data?.promptFeedback || null,
-          usageMetadata: data?.usageMetadata || null,
-          textLength: answer.length,
-          textPreview: answer.slice(0, 700)
-        }));
+      if (isDesignStudio) {
+        console.warn(
+          "Design Studio Gemini diagnostics:",
+          JSON.stringify({
+            model: requestModel,
+            maxOutputTokens,
+            finishReason: candidate?.finishReason || null,
+            promptFeedback: data?.promptFeedback || null,
+            usageMetadata: data?.usageMetadata || null,
+            textLength: answer.length,
+            textPreview: answer.slice(0, 700)
+          })
+        );
       }
 
       if (!answer) {
