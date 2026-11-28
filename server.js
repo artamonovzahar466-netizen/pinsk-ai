@@ -1,29 +1,6 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 "use strict";
 
 const express = require("express");
@@ -2409,6 +2386,61 @@ app.post(
         INSERT INTO messages (conversation_id, role, content)
         VALUES ($1, 'user', $2)
       `, [conversationId, userContent]);
+
+      // Exact one-line greetings and thanks do not need a model round-trip.
+      // Answer locally in the selected language to make these interactions immediate.
+      if (isQuickGreeting) {
+        const normalizedGreeting = message
+          .toLocaleLowerCase()
+          .replace(/[!,.?؟،؛\s]+/gu, " ")
+          .trim();
+        const isThanks = /^(спасибо|благодарю|thanks|thank you)$/.test(normalizedGreeting);
+        const quickReplies = {
+          greeting: {
+            "ru-RU": "Привет! Чем могу помочь?",
+            "kk-KZ": "Сәлем! Қалай көмектесе аламын?",
+            "en-GB": "Hello! How can I help?",
+            "fr-FR": "Bonjour ! Comment puis-je vous aider ?",
+            "es-ES": "¡Hola! ¿En qué puedo ayudarte?",
+            "it-IT": "Ciao! Come posso aiutarti?",
+            "az-AZ": "Salam! Sizə necə kömək edə bilərəm?",
+            "zh-CN": "你好！有什么可以帮你？"
+          },
+          thanks: {
+            "ru-RU": "Пожалуйста! Чем ещё могу помочь?",
+            "kk-KZ": "Оқасы жоқ! Тағы немен көмектесейін?",
+            "en-GB": "You're welcome! What else can I help with?",
+            "fr-FR": "Avec plaisir ! Que puis-je faire d’autre pour vous ?",
+            "es-ES": "¡De nada! ¿En qué más puedo ayudarte?",
+            "it-IT": "Prego! In cos'altro posso aiutarti?",
+            "az-AZ": "Buyurun! Başqa nə ilə kömək edə bilərəm?",
+            "zh-CN": "不客气！还有什么我可以帮你的吗？"
+          }
+        };
+        const replyGroup = isThanks ? quickReplies.thanks : quickReplies.greeting;
+        const quickAnswer = replyGroup[requestedResponseLanguage] || replyGroup["ru-RU"];
+
+        await pool.query(`
+          INSERT INTO messages (conversation_id, role, content)
+          VALUES ($1, 'assistant', $2)
+        `, [conversationId, quickAnswer]);
+
+        const quickUsage = await getUsage(userId);
+        return res.json({
+          answer: quickAnswer,
+          conversationId,
+          model: "local-quick-reply",
+          files: fileDescriptions,
+          usage: {
+            plan: req.user.role,
+            messagesUsed: quickUsage.messages,
+            messagesLimit: limits.messages === Infinity ? "unlimited" : limits.messages,
+            messagesRemaining: limits.messages === Infinity
+              ? "unlimited"
+              : Math.max(0, limits.messages - quickUsage.messages)
+          }
+        });
+      }
 
       const recentResult = await pool.query(`
         SELECT role, content
