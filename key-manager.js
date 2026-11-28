@@ -1,5 +1,13 @@
 
 
+
+
+
+
+
+
+
+
 "use strict";
 
 const crypto = require("crypto");
@@ -567,15 +575,9 @@ function wait(ms) {
 async function waitForAvailableKey(
   db,
   excludedIds,
-  startedAt,
-  signal = null
+  startedAt
 ) {
   while (Date.now() - startedAt < KEY_WAIT_MS) {
-    if (signal?.aborted) {
-      const error = new Error("Запрос остановлен пользователем.");
-      error.name = "AbortError";
-      throw error;
-    }
     const key = await getNextApiKey(
       db,
       excludedIds
@@ -583,19 +585,7 @@ async function waitForAvailableKey(
 
     if (key) return key;
 
-    if (signal) {
-      await new Promise(resolve => {
-        const timer = setTimeout(done, KEY_WAIT_INTERVAL_MS);
-        function done() {
-          signal.removeEventListener("abort", done);
-          clearTimeout(timer);
-          resolve();
-        }
-        signal.addEventListener("abort", done, { once: true });
-      });
-    } else {
-      await wait(KEY_WAIT_INTERVAL_MS);
-    }
+    await wait(KEY_WAIT_INTERVAL_MS);
   }
 
   return null;
@@ -627,47 +617,30 @@ async function executeWithKeyRotation(
   );
 
   const startedAt = Date.now();
-  const externalSignal = options.signal;
-  const makeAbortError = () => {
-    const error = new Error("Запрос остановлен пользователем.");
-    error.name = "AbortError";
-    return error;
-  };
-  const throwIfAborted = () => {
-    if (externalSignal?.aborted) throw makeAbortError();
-  };
 
   let lastError = null;
   let attempts = 0;
 
   while (attempts < maxAttempts) {
-    throwIfAborted();
     let key = await getNextApiKey(
       db,
       [...excludedIds]
     );
 
-    throwIfAborted();
-
     if (!key && attempts === 0) {
       key = await waitForAvailableKey(
         db,
         [...excludedIds],
-        startedAt,
-        externalSignal
+        startedAt
       );
     }
 
-    throwIfAborted();
     if (!key) break;
 
     attempts += 1;
     excludedIds.add(Number(key.id));
 
     const controller = new AbortController();
-    const abortFromCaller = () => controller.abort();
-    if (externalSignal?.aborted) controller.abort();
-    else externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
     const heartbeat = setInterval(async () => {
       try {
@@ -712,17 +685,6 @@ async function executeWithKeyRotation(
       return result;
 
     } catch (error) {
-      if (externalSignal?.aborted) {
-        await recordKeyResultAndRelease(
-          db,
-          key.id,
-          key.leaseToken,
-          { success: true }
-        );
-        finished = true;
-        throw makeAbortError();
-      }
-
       lastError = error;
 
       const status = getErrorStatus(error);
@@ -804,7 +766,6 @@ async function executeWithKeyRotation(
 
     } finally {
       clearInterval(heartbeat);
-      externalSignal?.removeEventListener("abort", abortFromCaller);
 
       if (!finished) {
         try {
