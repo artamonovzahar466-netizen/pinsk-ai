@@ -1,12 +1,5 @@
 
 
-
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -1596,19 +1589,32 @@ function installImageModeButton() {
 
   const reasoningButton = $("reasoningButton");
   const attachButton = $("attachButton");
+  const voiceButton = $("voiceButton");
+  const controlsParent = reasoningButton?.parentElement || attachButton?.parentElement;
 
-  // Keep image generation directly below Deep Thinking, matching its size.
-  if (reasoningButton && reasoningButton.parentElement) {
-    const parent = reasoningButton.parentElement;
-    const stack = document.createElement("div");
-    stack.className = "composer-mode-stack";
-    parent.insertBefore(stack, reasoningButton);
-    stack.appendChild(reasoningButton);
-    stack.appendChild(button);
-  } else if (attachButton && attachButton.parentElement) {
-    attachButton.insertAdjacentElement("afterend", button);
+  // Two compact rows: File + Deep Thinking, then Image mode + Microphone.
+  if (controlsParent) {
+    let layout = controlsParent.querySelector(".composer-control-layout");
+    if (!layout) {
+      layout = document.createElement("div");
+      layout.className = "composer-control-layout";
+      const firstRow = document.createElement("div");
+      firstRow.className = "composer-control-row";
+      firstRow.setAttribute("aria-label", "Основные инструменты");
+      const secondRow = document.createElement("div");
+      secondRow.className = "composer-control-row";
+      secondRow.setAttribute("aria-label", "Дополнительные режимы");
+      layout.append(firstRow, secondRow);
+      controlsParent.insertBefore(layout, controlsParent.firstChild);
+
+      if (attachButton) firstRow.appendChild(attachButton);
+      if (reasoningButton) firstRow.appendChild(reasoningButton);
+      secondRow.appendChild(button);
+      if (voiceButton) secondRow.appendChild(voiceButton);
+    }
   } else {
     form.appendChild(button);
+    if (voiceButton) button.insertAdjacentElement("afterend", voiceButton);
   }
 }
 
@@ -3403,9 +3409,9 @@ function installPinskUiFixes() {
       z-index: 1200;
       left: 50%;
       right: auto;
-      bottom: 158px;
-      width: 38px;
-      height: 38px;
+      bottom: 218px;
+      width: 36px;
+      height: 36px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -3887,21 +3893,34 @@ function installPinskUiFixes() {
       display: none !important;
     }
 
-    /* Image mode is stacked directly below Deep Thinking. */
-    .composer-mode-stack {
+    /* Two tidy composer rows: attachment/reasoning, then image/microphone. */
+    .composer-control-layout {
       display: flex;
       flex-direction: column;
-      align-items: stretch;
+      align-items: flex-start;
       justify-content: center;
       gap: 6px;
       min-width: 0;
     }
 
-    .composer-mode-stack .tool-button,
-    .composer-mode-stack .pinsk-image-mode {
-      width: 100%;
+    .composer-control-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
       min-width: 0;
+    }
+
+    .composer-control-row .tool-button,
+    .composer-control-row .pinsk-image-mode {
       white-space: nowrap;
+    }
+
+    .composer-control-row .voice-inline-button {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
+      margin: 0 2px;
     }
 
     /* Кнопка генерации */
@@ -4114,7 +4133,7 @@ function installPinskUiFixes() {
       .pinsk-scroll-bottom {
         left: 50%;
         right: auto;
-        bottom: 158px;
+        bottom: 218px;
         width: 36px;
         height: 36px;
       }
