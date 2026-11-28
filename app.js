@@ -4333,6 +4333,38 @@ function installPinskUiFixes() {
         margin: 0 2px;
       }
     }
+    /* Компактное отдельное окно ввода: убираем широкую тёмную полосу вокруг него. */
+    .composer-area,
+    #composerArea,
+    .composer-container {
+      width: min(700px, calc(100% - 32px)) !important;
+      max-width: 700px !important;
+      margin-left: auto !important;
+      margin-right: auto !important;
+      background: transparent !important;
+      border: 0 !important;
+      box-shadow: none !important;
+    }
+
+    .composer-area .composer,
+    #composerArea .composer,
+    .composer-container .composer,
+    #chatForm {
+      width: 100% !important;
+      max-width: 700px !important;
+      margin-left: auto !important;
+      margin-right: auto !important;
+      box-sizing: border-box !important;
+    }
+
+    @media (max-width: 600px) {
+      .composer-area,
+      #composerArea,
+      .composer-container {
+        width: calc(100% - 20px) !important;
+        max-width: none !important;
+      }
+    }
   `;
 
   document.head.appendChild(style);
