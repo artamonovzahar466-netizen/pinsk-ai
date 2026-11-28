@@ -1,6 +1,5 @@
 
 
-
 "use strict";
 
 const express = require("express");
@@ -2958,18 +2957,89 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     ]);
 
-    let generated;
-    try {
-      const cleaned = String(answer)
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-      const start = cleaned.indexOf("{");
-      const end = cleaned.lastIndexOf("}");
-      if (start < 0 || end <= start) throw new Error("JSON not found");
-      generated = JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
+    // Gemini иногда оборачивает JSON в Markdown или добавляет пояснение.
+    // Извлекаем JSON-объект с учётом вложенных скобок и строк.
+    function parseStudioProject(raw) {
+      const source = String(raw || "").trim();
+      if (!source) return null;
+
+      try {
+        const parsed = JSON.parse(source);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {}
+
+      let depth = 0;
+      let start = -1;
+      let inString = false;
+      let escaped = false;
+
+      for (let i = 0; i < source.length; i++) {
+        const char = source[i];
+
+        if (inString) {
+          if (escaped) {
+            escaped = false;
+          } else if (char === "\\\\") {
+            escaped = true;
+          } else if (char === '"') {
+            inString = false;
+          }
+          continue;
+        }
+
+        if (char === '"') {
+          inString = true;
+        } else if (char === "{") {
+          if (depth === 0) start = i;
+          depth++;
+        } else if (char === "}") {
+          depth--;
+
+          if (depth === 0 && start !== -1) {
+            try {
+              const parsed = JSON.parse(source.slice(start, i + 1));
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                return parsed;
+              }
+            } catch {}
+            start = -1;
+          }
+        }
+      }
+
+      return null;
+    }
+
+    let generated = parseStudioProject(answer);
+
+    // Если ответ не содержит пригодной HTML-разметки, повторяем запрос.
+    if (!generated || typeof generated.html !== "string" || !generated.html.trim()) {
+      console.warn("Design Studio: ответ Gemini имеет неверный формат. Повторная генерация.");
+
+      const retryAnswer = await askAI([
+        {
+          role: "system",
+          content:
+            "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
+            designLanguageInstruction + " " +
+            "Создай законченный адаптивный сайт. Верни только один корректный JSON-объект без Markdown и пояснений. " +
+            "Обязательные ключи: html, css, js. Все три значения должны быть строками. " +
+            "html — содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
+            "Корректно экранируй кавычки, обратные слеши и переносы строк внутри JSON."
+        },
+        {
+          role: "user",
+          content: "Повтори создание сайта по этому заданию. В предыдущем ответе формат оказался некорректным. Верни только валидный JSON.\n\n" + prompt
+        }
+      ]);
+
+      generated = parseStudioProject(retryAnswer);
+    }
+
+    if (!generated || typeof generated.html !== "string" || !generated.html.trim()) {
+      throw new Error("Gemini дважды вернул ответ без корректной HTML-разметки. Попробуй повторить запрос.");
     }
 
     const html = String(generated.html || "").slice(0, 120000);
