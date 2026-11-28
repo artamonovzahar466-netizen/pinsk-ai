@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 "use strict";
 
 /* =========================================
@@ -41,6 +34,7 @@ let currentChatId = null;
 let currentPage = "chat";
 let usageData = null;
 let isSending = false;
+let activeRequestController = null;
 const APP_LANGUAGES = {
   "ru-RU": "Русский",
   "en-GB": "English (UK)",
@@ -48,14 +42,19 @@ const APP_LANGUAGES = {
   "zh-CN": "中文（简体）",
   "az-AZ": "Azərbaycanca",
   "it-IT": "Italiano",
+  "en-GB": "English",
   "fr-FR": "Français",
   "es-ES": "Español",
   "de-DE": "Deutsch",
   "tr-TR": "Türkçe"
+  "it-IT": "Italiano",
+  "az-AZ": "Azərbaycanca",
+  "zh-CN": "中文（简体）"
 };
 const APP_LANGUAGE_CODES = Object.keys(APP_LANGUAGES);
 
 // Локальный словарь интерфейса: не обращается к Gemini и не расходует API-ключи.
+// Перевод интерфейса отдельно от ответов ассистента и пользовательских сообщений.
 const UI_TRANSLATIONS = {
   "Новый чат": ["New chat", "Жаңа чат", "新聊天", "Yeni sohbet", "Nuova chat", "Nouvelle discussion", "Nuevo chat", "Neuer Chat", "Yeni sohbet"],
   "Рабочее пространство": ["Workspace", "Жұмыс кеңістігі", "工作区", "İş alanı", "Spazio di lavoro", "Espace de travail", "Espacio de trabajo", "Arbeitsbereich", "Çalışma alanı"],
@@ -92,6 +91,27 @@ const UI_TRANSLATIONS = {
   "Глубокое рассуждение": ["Deep reasoning", "Терең пайымдау", "深度推理", "Dərin mühakimə", "Ragionamento approfondito", "Raisonnement approfondi", "Razonamiento profundo", "Tiefes Schlussfolgern", "Derin akıl yürütme"],
   "Сохранить": ["Save", "Сақтау", "保存", "Yadda saxla", "Salva", "Enregistrer", "Guardar", "Speichern", "Kaydet"],
   "Настройки сохранены.": ["Settings saved.", "Параметрлер сақталды.", "设置已保存。", "Parametrlər saxlanıldı.", "Impostazioni salvate.", "Paramètres enregistrés.", "Configuración guardada.", "Einstellungen gespeichert.", "Ayarlar kaydedildi."]
+  "kk-KZ": {
+    "＋ Новый чат":"＋ Жаңа чат", "Рабочее пространство":"Жұмыс кеңістігі", "Чат":"Чат", "Обзор":"Шолу", "Проекты":"Жобалар", "Библиотека":"Кітапхана", "Плагины":"Плагиндер", "Анализ данных":"Деректерді талдау", "Студия дизайна":"Дизайн студиясы", "История":"Тарих", "Ваш тариф":"Сіздің тарифіңіз", "Попробуйте возможности Pinsk PRO":"Pinsk PRO мүмкіндіктерін қолданып көріңіз", "Улучшить тариф ↗":"Тарифті жаңарту ↗", "Пользователь":"Пайдаланушы", "Бесплатный план":"Тегін жоспар", "Настройки":"Баптаулар", "Перейти на PRO ↗":"PRO нұсқасына өту ↗", "Чем могу помочь?":"Қалай көмектесе аламын?", "Я Pinsk — ваш интеллектуальный помощник.":"Мен Pinsk — сіздің ақылды көмекшіңізбін.", "Написать текст":"Мәтін жазу", "Письма, статьи и идеи":"Хаттар, мақалалар және идеялар", "Объяснить тему":"Тақырыпты түсіндіру", "Понятные ответы":"Түсінікті жауаптар", "Написать код":"Код жазу", "Программирование":"Бағдарламалау", "Найти идею":"Идея табу", "Творчество и проекты":"Шығармашылық және жобалар", "＋ Файл":"＋ Файл", "Файл":"Файл", "Глубокое мышление":"Терең ойлау", "Отправить":"Жіберу", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk қателесуі мүмкін. Маңызды ақпаратты тексеріңіз.", "Спросите что-нибудь у Pinsk...":"Pinsk-тен бірдеңе сұраңыз...", "Спросите что-нибудь...":"Бірдеңе сұраңыз...", "Создать изображение":"Сурет жасау", "Язык ответов Pinsk":"Pinsk жауаптарының тілі", "Сохранить":"Сақтау", "Настройки Pinsk":"Pinsk баптаулары"
+  },
+  "en-GB": {
+    "＋ Новый чат":"＋ New chat", "Рабочее пространство":"Workspace", "Чат":"Chat", "Обзор":"Overview", "Проекты":"Projects", "Библиотека":"Library", "Плагины":"Plugins", "Анализ данных":"Data analysis", "Студия дизайна":"Design Studio", "История":"History", "Ваш тариф":"Your plan", "Попробуйте возможности Pinsk PRO":"Try Pinsk PRO features", "Улучшить тариф ↗":"Upgrade plan ↗", "Пользователь":"User", "Бесплатный план":"Free plan", "Настройки":"Settings", "Перейти на PRO ↗":"Upgrade to PRO ↗", "Чем могу помочь?":"How can I help?", "Я Pinsk — ваш интеллектуальный помощник.":"I'm Pinsk — your intelligent assistant.", "Написать текст":"Write text", "Письма, статьи и идеи":"Emails, articles and ideas", "Объяснить тему":"Explain a topic", "Понятные ответы":"Clear answers", "Написать код":"Write code", "Программирование":"Programming", "Найти идею":"Find an idea", "Творчество и проекты":"Creativity and projects", "＋ Файл":"＋ File", "Файл":"File", "Глубокое мышление":"Deep thinking", "Отправить":"Send", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk can make mistakes. Check important information.", "Спросите что-нибудь у Pinsk...":"Ask Pinsk anything...", "Спросите что-нибудь...":"Ask anything...", "Создать изображение":"Create image", "Язык ответов Pinsk":"Pinsk response language", "Сохранить":"Save", "Настройки Pinsk":"Pinsk settings"
+  },
+  "fr-FR": {
+    "＋ Новый чат":"＋ Nouvelle discussion", "Рабочее пространство":"Espace de travail", "Чат":"Discussion", "Обзор":"Vue d’ensemble", "Проекты":"Projets", "Библиотека":"Bibliothèque", "Плагины":"Extensions", "Анализ данных":"Analyse des données", "Студия дизайна":"Studio de design", "История":"Historique", "Ваш тариф":"Votre offre", "Попробуйте возможности Pinsk PRO":"Découvrez Pinsk PRO", "Улучшить тариф ↗":"Passer à une offre supérieure ↗", "Пользователь":"Utilisateur", "Бесплатный план":"Offre gratuite", "Настройки":"Paramètres", "Перейти на PRO ↗":"Passer à PRO ↗", "Чем могу помочь?":"Comment puis-je vous aider ?", "Я Pinsk — ваш интеллектуальный помощник.":"Je suis Pinsk, votre assistant intelligent.", "Написать текст":"Rédiger un texte", "Письма, статьи и идеи":"E-mails, articles et idées", "Объяснить тему":"Expliquer un sujet", "Понятные ответы":"Des réponses claires", "Написать код":"Écrire du code", "Программирование":"Programmation", "Найти идею":"Trouver une idée", "Творчество и проекты":"Créativité et projets", "＋ Файл":"＋ Fichier", "Файл":"Fichier", "Глубокое мышление":"Réflexion approfondie", "Отправить":"Envoyer", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk peut faire des erreurs. Vérifiez les informations importantes.", "Спросите что-нибудь у Pinsk...":"Posez une question à Pinsk...", "Спросите что-нибудь...":"Posez une question...", "Создать изображение":"Créer une image", "Язык ответов Pinsk":"Langue des réponses de Pinsk", "Сохранить":"Enregistrer", "Настройки Pinsk":"Paramètres de Pinsk"
+  },
+  "es-ES": {
+    "＋ Новый чат":"＋ Nuevo chat", "Рабочее пространство":"Espacio de trabajo", "Чат":"Chat", "Обзор":"Resumen", "Проекты":"Proyectos", "Библиотека":"Biblioteca", "Плагины":"Complementos", "Анализ данных":"Análisis de datos", "Студия дизайна":"Estudio de diseño", "История":"Historial", "Ваш тариф":"Tu plan", "Попробуйте возможности Pinsk PRO":"Prueba las funciones de Pinsk PRO", "Улучшить тариф ↗":"Mejorar plan ↗", "Пользователь":"Usuario", "Бесплатный план":"Plan gratuito", "Настройки":"Ajustes", "Перейти на PRO ↗":"Pasar a PRO ↗", "Чем могу помочь?":"¿En qué puedo ayudarte?", "Я Pinsk — ваш интеллектуальный помощник.":"Soy Pinsk, tu asistente inteligente.", "Написать текст":"Escribir texto", "Письма, статьи и идеи":"Correos, artículos e ideas", "Объяснить тему":"Explicar un tema", "Понятные ответы":"Respuestas claras", "Написать код":"Escribir código", "Программирование":"Programación", "Найти идею":"Encontrar una idea", "Творчество и проекты":"Creatividad y proyectos", "＋ Файл":"＋ Archivo", "Файл":"Archivo", "Глубокое мышление":"Razonamiento profundo", "Отправить":"Enviar", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk puede cometer errores. Comprueba la información importante.", "Спросите что-нибудь у Pinsk...":"Pregúntale algo a Pinsk...", "Спросите что-нибудь...":"Pregunta lo que quieras...", "Создать изображение":"Crear imagen", "Язык ответов Pinsk":"Idioma de las respuestas de Pinsk", "Сохранить":"Guardar", "Настройки Pinsk":"Ajustes de Pinsk"
+  },
+  "it-IT": {
+    "＋ Новый чат":"＋ Nuova chat", "Рабочее пространство":"Area di lavoro", "Чат":"Chat", "Обзор":"Panoramica", "Проекты":"Progetti", "Библиотека":"Libreria", "Плагины":"Plugin", "Анализ данных":"Analisi dei dati", "Студия дизайна":"Studio di design", "История":"Cronologia", "Ваш тариф":"Il tuo piano", "Попробуйте возможности Pinsk PRO":"Prova le funzioni di Pinsk PRO", "Улучшить тариф ↗":"Migliora il piano ↗", "Пользователь":"Utente", "Бесплатный план":"Piano gratuito", "Настройки":"Impostazioni", "Перейти на PRO ↗":"Passa a PRO ↗", "Чем могу помочь?":"Come posso aiutarti?", "Я Pinsk — ваш интеллектуальный помощник.":"Sono Pinsk, il tuo assistente intelligente.", "Написать текст":"Scrivi un testo", "Письма, статьи и идеи":"Email, articoli e idee", "Объяснить тему":"Spiega un argomento", "Понятные ответы":"Risposte chiare", "Написать код":"Scrivi codice", "Программирование":"Programmazione", "Найти идею":"Trova un’idea", "Творчество и проекты":"Creatività e progetti", "＋ Файл":"＋ File", "Файл":"File", "Глубокое мышление":"Ragionamento approfondito", "Отправить":"Invia", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk può commettere errori. Verifica le informazioni importanti.", "Спросите что-нибудь у Pinsk...":"Chiedi qualcosa a Pinsk...", "Спросите что-нибудь...":"Chiedi qualcosa...", "Создать изображение":"Crea immagine", "Язык ответов Pinsk":"Lingua delle risposte di Pinsk", "Сохранить":"Salva", "Настройки Pinsk":"Impostazioni di Pinsk"
+  },
+  "az-AZ": {
+    "＋ Новый чат":"＋ Yeni söhbət", "Рабочее пространство":"İş sahəsi", "Чат":"Söhbət", "Обзор":"İcmal", "Проекты":"Layihələr", "Библиотека":"Kitabxana", "Плагины":"Plaginlər", "Анализ данных":"Məlumatların təhlili", "Студия дизайна":"Dizayn studiyası", "История":"Tarixçə", "Ваш тариф":"Tarifiniz", "Попробуйте возможности Pinsk PRO":"Pinsk PRO imkanlarını sınayın", "Улучшить тариф ↗":"Tarifi yüksəlt ↗", "Пользователь":"İstifadəçi", "Бесплатный план":"Pulsuz plan", "Настройки":"Parametrlər", "Перейти на PRO ↗":"PRO-ya keç ↗", "Чем могу помочь?":"Sizə necə kömək edə bilərəm?", "Я Pinsk — ваш интеллектуальный помощник.":"Mən Pinsk — ağıllı köməkçinizəm.", "Написать текст":"Mətn yaz", "Письма, статьи и идеи":"Məktublar, məqalələr və ideyalar", "Объяснить тему":"Mövzunu izah et", "Понятные ответы":"Aydın cavablar", "Написать код":"Kod yaz", "Программирование":"Proqramlaşdırma", "Найти идею":"İdeya tap", "Творчество и проекты":"Yaradıcılıq və layihələr", "＋ Файл":"＋ Fayl", "Файл":"Fayl", "Глубокое мышление":"Dərin düşünmə", "Отправить":"Göndər", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk səhv edə bilər. Vacib məlumatları yoxlayın.", "Спросите что-нибудь у Pinsk...":"Pinsk-dən nəsə soruşun...", "Спросите что-нибудь...":"Nəsə soruşun...", "Создать изображение":"Şəkil yarat", "Язык ответов Pinsk":"Pinsk cavablarının dili", "Сохранить":"Yadda saxla", "Настройки Pinsk":"Pinsk parametrləri"
+  },
+  "zh-CN": {
+    "＋ Новый чат":"＋ 新建聊天", "Рабочее пространство":"工作区", "Чат":"聊天", "Обзор":"概览", "Проекты":"项目", "Библиотека":"资料库", "Плагины":"插件", "Анализ данных":"数据分析", "Студия дизайна":"设计工作室", "История":"历史记录", "Ваш тариф":"您的套餐", "Попробуйте возможности Pinsk PRO":"体验 Pinsk PRO 功能", "Улучшить тариф ↗":"升级套餐 ↗", "Пользователь":"用户", "Бесплатный план":"免费套餐", "Настройки":"设置", "Перейти на PRO ↗":"升级到 PRO ↗", "Чем могу помочь?":"我能帮您什么？", "Я Pinsk — ваш интеллектуальный помощник.":"我是 Pinsk，您的智能助手。", "Написать текст":"撰写文本", "Письма, статьи и идеи":"邮件、文章和创意", "Объяснить тему":"解释主题", "Понятные ответы":"清晰的回答", "Написать код":"编写代码", "Программирование":"编程", "Найти идею":"寻找灵感", "Творчество и проекты":"创意与项目", "＋ Файл":"＋ 文件", "Файл":"文件", "Глубокое мышление":"深度思考", "Отправить":"发送", "Pinsk может допускать ошибки. Проверяйте важную информацию.":"Pinsk 可能会出错。请核实重要信息。", "Спросите что-нибудь у Pinsk...":"向 Pinsk 提问...", "Спросите что-нибудь...":"请输入问题...", "Создать изображение":"创建图像", "Язык ответов Pinsk":"Pinsk 回复语言", "Сохранить":"保存", "Настройки Pinsk":"Pinsk 设置"
+  }
 };
 
 const uiOriginalText = new WeakMap();
@@ -100,6 +120,11 @@ const uiOriginalAttributes = new WeakMap();
 function translateUI() {
   const localeIndex = APP_LANGUAGE_CODES.indexOf(language);
   const excluded = "#messages, #messages *, .message-content, .user-message, pre, code, textarea, input";
+const originalUiTextNodes = new WeakMap();
+const originalUiAttributes = new WeakMap();
+function applyInterfaceLanguage() {
+  const dictionary = UI_TRANSLATIONS[language] || {};
+  document.documentElement.lang = language;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -111,6 +136,15 @@ function translateUI() {
     const translations = UI_TRANSLATIONS[trimmed];
     const translated = localeIndex > 0 ? translations?.[localeIndex - 1] : null;
     const nextValue = translated ? String(original).replace(trimmed, translated) : original;
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.parentElement?.closest("#messages, textarea, input, script, style, code, pre")) continue;
+    if (!originalUiTextNodes.has(node)) originalUiTextNodes.set(node, node.nodeValue);
+    const original = originalUiTextNodes.get(node);
+    const trimmed = original.trim();
+    if (!trimmed) continue;
+    const translated = dictionary[trimmed] || trimmed;
+    const nextValue = original.replace(trimmed, translated);
     if (node.nodeValue !== nextValue) node.nodeValue = nextValue;
   }
   document.querySelectorAll("[placeholder], [title], [aria-label]").forEach(element => {
@@ -126,6 +160,16 @@ function translateUI() {
       const translated = localeIndex > 0 ? translations?.[localeIndex - 1] : null;
       const nextValue = translated || source;
       if (value !== nextValue) element.setAttribute(attr, nextValue);
+    let saved = originalUiAttributes.get(element);
+    if (!saved) { saved = {}; originalUiAttributes.set(element, saved); }
+    for (const attribute of ["placeholder", "title", "aria-label"]) {
+      const value = element.getAttribute(attribute);
+      if (value && saved[attribute] === undefined) saved[attribute] = value;
+      const original = saved[attribute];
+      if (original !== undefined) {
+        const translated = dictionary[original] || original;
+        if (value !== translated) element.setAttribute(attribute, translated);
+      }
     }
   });
   document.documentElement.lang = language;
@@ -136,6 +180,12 @@ function installUITranslations() {
   if (uiTranslationObserver || !document.body) return;
   uiTranslationObserver = new MutationObserver(() => translateUI());
   uiTranslationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+let interfaceTranslationObserver = null;
+function installInterfaceTranslations() {
+  applyInterfaceLanguage();
+  if (interfaceTranslationObserver || !document.body) return;
+  interfaceTranslationObserver = new MutationObserver(() => applyInterfaceLanguage());
+  interfaceTranslationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
 }
 let language = localStorage.getItem(STORAGE.language) || "ru-RU";
 if (language === "ru") language = "ru-RU";
@@ -154,6 +204,7 @@ let voiceBargeInRecognition = null;
 let voicePendingUtterance = "";
 let currentSpeechText = "";
 const SUPPORTED_VOICE_LANGUAGES = APP_LANGUAGE_CODES;
+const SUPPORTED_VOICE_LANGUAGES = ["ru-RU", "kk-KZ", "en-GB", "fr-FR", "es-ES", "it-IT", "az-AZ", "zh-CN"];
 let voiceLanguage = localStorage.getItem("pinsk_voice_language") || "ru-RU";
 if (!SUPPORTED_VOICE_LANGUAGES.includes(voiceLanguage)) voiceLanguage = "ru-RU";
 const VOICE_LANGUAGES = {
@@ -167,6 +218,7 @@ const VOICE_LANGUAGES = {
   "zh-CN": "Китайский (упрощённый)",
   "de-DE": "Немецкий",
   "tr-TR": "Турецкий"
+  "zh-CN": "Китайский (упрощённый)"
 };
 let selectedAnalysisFile = null;
 
@@ -1316,6 +1368,15 @@ function updateScrollToBottomButton() {
     "visible",
     chatIsActive && distanceToBottom > 220
   );
+
+  const composerArea = document.querySelector(".composer-area");
+  if (composerArea) {
+    const composerRect = composerArea.getBoundingClientRect();
+    // Центрируем стрелку точно над полем ввода, а не относительно всего окна.
+    button.style.left = `${composerRect.left + composerRect.width / 2}px`;
+    const composerTop = composerRect.top;
+    button.style.bottom = `${Math.max(12, window.innerHeight - composerTop + 8)}px`;
+  }
 }
 
 function renderMessage(role, content, options = {}) {
@@ -1463,12 +1524,30 @@ function setSendingState(value) {
 
   const sendButton = $("sendButton");
   const imageButton = $("imageModeButton");
+  const form = $("chatForm");
+  let stopButton = $("stopGenerationButton");
+
+  if (form && !stopButton && sendButton) {
+    stopButton = document.createElement("button");
+    stopButton.type = "button";
+    stopButton.id = "stopGenerationButton";
+    stopButton.className = "stop-generation-button";
+    stopButton.textContent = "■";
+    stopButton.title = "Остановить ответ";
+    stopButton.setAttribute("aria-label", "Остановить ответ");
+    stopButton.addEventListener("click", () => {
+      if (activeRequestController) activeRequestController.abort();
+    });
+    sendButton.insertAdjacentElement("afterend", stopButton);
+  }
 
   if (sendButton) sendButton.disabled = value;
   if (imageButton) imageButton.disabled = value;
+  if (stopButton) stopButton.hidden = !value || !activeRequestController;
 }
 
 function createLoadingMessage(text = "Pinsk думает...") {
+function createLoadingMessage(text = "Pinsk думает") {
   const loading = document.createElement("div");
   loading.className = "message assistant-message loading-message";
 
@@ -1504,6 +1583,7 @@ async function sendMessage(value, options = {}) {
     return;
   }
 
+  activeRequestController = options.voiceSession ? null : new AbortController();
   setSendingState(true);
 
   if (currentPage === "chat" && $("welcome")) {
@@ -1522,13 +1602,21 @@ async function sendMessage(value, options = {}) {
 
   const loading = options.voiceSession ? null : createLoadingMessage(
     imageMode ? "Pinsk создаёт изображение..." : "Pinsk думает..."
+    imageMode ? "Pinsk создаёт изображение..." :
+      files.length ? "Pinsk изучает вложения" : "Pinsk думает"
   );
+  setSendingState(true);
+
+  // Keep one calm status instead of cycling through several phrases.
+  // This does not imply that the model is progressing through separate stages.
 
   try {
     if (imageMode) {
       const data = await api("/api/images/generate", {
         method: "POST",
         body: JSON.stringify({ prompt: message, language })
+        body: JSON.stringify({ prompt: message, language }),
+        signal: activeRequestController?.signal
       });
 
       loading?.remove();
@@ -1582,6 +1670,8 @@ async function sendMessage(value, options = {}) {
         data = await api("/api/chat", {
           method: "POST",
           body: formData
+          body: formData,
+          signal: activeRequestController?.signal
         });
       }
 
@@ -1597,6 +1687,7 @@ async function sendMessage(value, options = {}) {
       } else {
         renderMessage("assistant", answer);
         if (options.speak) speakAnswer(answer);
+        // В обычном текстовом чате ответы не озвучиваются автоматически.
       }
 
       await loadUsage();
@@ -1608,16 +1699,21 @@ async function sendMessage(value, options = {}) {
   } catch (error) {
     loading?.remove();
     if (options.voiceSession) {
+    if (error.name === "AbortError" && !options.voiceSession) {
+      toast("Ответ остановлен.");
+    } else if (options.voiceSession) {
       setVoiceStatus("Ошибка голосового ответа: " + error.message, "error");
     } else {
       renderMessage(
         "assistant",
         "Не удалось выполнить запрос: " + error.message
       );
+      toast(error.message);
     }
     toast(error.message);
 
   } finally {
+    activeRequestController = null;
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
@@ -1675,12 +1771,37 @@ function installImageModeButton() {
     }
   });
 
+  const reasoningButton = $("reasoningButton");
   const attachButton = $("attachButton");
 
   if (attachButton && attachButton.parentElement === form) {
     form.insertBefore(button, attachButton);
+  const voiceButton = $("voiceButton");
+  const controlsParent = reasoningButton?.parentElement || attachButton?.parentElement;
+
+  // Two compact rows: File + Deep Thinking, then Image mode + Microphone.
+  if (controlsParent) {
+    let layout = controlsParent.querySelector(".composer-control-layout");
+    if (!layout) {
+      layout = document.createElement("div");
+      layout.className = "composer-control-layout";
+      const firstRow = document.createElement("div");
+      firstRow.className = "composer-control-row";
+      firstRow.setAttribute("aria-label", "Основные инструменты");
+      const secondRow = document.createElement("div");
+      secondRow.className = "composer-control-row";
+      secondRow.setAttribute("aria-label", "Дополнительные режимы");
+      layout.append(firstRow, secondRow);
+      controlsParent.insertBefore(layout, controlsParent.firstChild);
+
+      if (attachButton) firstRow.appendChild(attachButton);
+      if (reasoningButton) firstRow.appendChild(reasoningButton);
+      if (voiceButton) secondRow.appendChild(voiceButton);
+      secondRow.appendChild(button);
+    }
   } else {
     form.appendChild(button);
+    if (voiceButton) button.insertAdjacentElement("afterend", voiceButton);
   }
 }
 
@@ -1997,7 +2118,7 @@ function renderStudio() {
           </div>
           <div class="studio-preview-column">
             <div class="studio-preview-heading"><strong>Предпросмотр</strong><span>Изолированный режим</span></div>
-            <iframe id="studioPreview" title="Предпросмотр сайта" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"></iframe>
+            <iframe id="studioPreview" title="Предпросмотр сайта" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
           </div>
         </div>
       </section>
@@ -2147,65 +2268,13 @@ function setStudioEditorTab(file) {
 function buildStudioDocument() {
   let html = String(studioFiles.html || "");
   const css = `<style>\n${studioFiles.css || ""}\n</style>`;
-
-  // Навигационный мост работает только внутри изолированного iframe.
-  // Он перехватывает переходы к якорям и кнопку «Смотреть меню», чтобы
-  // прокручивать страницу к секции меню, а не открывать мобильную навигацию.
-  const navigationBridge = `<script>
-  (() => {
-    const normalize = value => String(value || "").toLowerCase().replace(/ё/g, "е").trim();
-    const findMenuTarget = () => {
-      const exactIds = ["menu", "food-menu", "menu-section", "our-menu", "меню"];
-      for (const id of exactIds) {
-        const target = document.getElementById(id);
-        if (target) return target;
-      }
-      return Array.from(document.querySelectorAll("section, [id], [class]"))
-        .find(node => {
-          const label = normalize([node.id, node.className, node.getAttribute("aria-label"), node.innerText?.slice(0, 100)].join(" "));
-          return /(^|[\s_-])menu([\s_-]|$)|меню/.test(label);
-        }) || null;
-    };
-    const scrollToTarget = target => {
-      if (!target) return false;
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-      if (target.id) history.replaceState(null, "", "#" + encodeURIComponent(target.id));
-      return true;
-    };
-    document.addEventListener("click", event => {
-      const control = event.target.closest("a, button, [role=button]");
-      if (!control) return;
-      const label = normalize(control.innerText || control.getAttribute("aria-label") || control.title);
-      const href = control.getAttribute("href") || "";
-      if (href.startsWith("#")) {
-        const id = decodeURIComponent(href.slice(1));
-        const target = document.getElementById(id);
-        if (target) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          scrollToTarget(target);
-          return;
-        }
-      }
-      if (/смотреть меню|посмотреть меню|view menu|see menu/.test(label)) {
-        const target = findMenuTarget();
-        if (target) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          scrollToTarget(target);
-        }
-      }
-    }, true);
-  })();
-  <\/script>`;
-
   const js = `<script>\n${String(studioFiles.js || "").replace(/<\/script/gi, "<\\/script")}\n<\/script>`;
 
   if (/<\/head\s*>/i.test(html)) html = html.replace(/<\/head\s*>/i, css + "</head>");
   else html = css + html;
 
-  if (/<\/body\s*>/i.test(html)) html = html.replace(/<\/body\s*>/i, navigationBridge + js + "</body>");
-  else html += navigationBridge + js;
+  if (/<\/body\s*>/i.test(html)) html = html.replace(/<\/body\s*>/i, js + "</body>");
+  else html += js;
   return html;
 }
 
@@ -3044,22 +3113,55 @@ function startInlineVoice() {
   try {
     const instance = new SpeechRecognition();
     recognition = instance;
+    let finalTranscript = "";
     instance.lang = language;
     instance.continuous = false;
     instance.interimResults = false;
     instance.onstart = () => $("voiceButton")?.classList.add("recording");
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.onstart = () => {
+      const button = $("voiceButton");
+      button?.classList.add("recording");
+      if (button) {
+        button.textContent = "■";
+        button.title = "Остановить запись";
+        button.setAttribute("aria-label", "Остановить запись");
+      }
+      toast("Идёт запись. Нажми ■, чтобы остановить.");
+    };
     instance.onresult = event => {
       const spoken = event.results[0][0].transcript;
       if ($("prompt")) $("prompt").value = spoken;
       sendMessage(spoken, { speak: true });
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += transcript + " ";
+        else interim += transcript;
+      }
+      const prompt = $("prompt");
+      if (prompt) prompt.value = (finalTranscript + interim).trim();
     };
     instance.onerror = event => {
       if (event.error === "not-allowed") toast("Разреши доступ к микрофону в браузере.");
       else toast("Не удалось распознать речь.");
+      else if (event.error !== "aborted" && event.error !== "no-speech") toast("Не удалось распознать речь.");
     };
     instance.onend = () => {
       if (recognition === instance) recognition = null;
       $("voiceButton")?.classList.remove("recording");
+      const button = $("voiceButton");
+      button?.classList.remove("recording");
+      if (button) {
+        button.textContent = "🎙";
+        button.title = "Голосовой ввод";
+        button.setAttribute("aria-label", "Голосовой ввод");
+      }
+      if (finalTranscript.trim()) {
+        toast("Текст распознан. Проверь его и нажми отправить.");
+        $("prompt")?.focus();
+      }
     };
     instance.start();
   } catch (error) {
@@ -3211,6 +3313,7 @@ function showSettings() {
       ${APP_LANGUAGE_CODES.map(code => `<option value="${code}" ${language === code ? "selected" : ""}>${APP_LANGUAGES[code]}</option>`).join("")}
     </select>
     <p class="settings-hint">Выбранный язык применяется к элементам интерфейса и ответам Pinsk. Перевод интерфейса работает локально и не зависит от Gemini.</p>
+    <p class="settings-hint">Язык применяется к ответам и элементам интерфейса Pinsk AI.</p>
 
     <label>
       <input type="checkbox" id="reasoningToggle"
@@ -3226,6 +3329,7 @@ function showSettings() {
     localStorage.setItem(STORAGE.language, language);
     voiceLanguage = language;
     localStorage.setItem("pinsk_voice_language", voiceLanguage);
+    applyInterfaceLanguage();
 
     localStorage.setItem(
       STORAGE.reasoning,
@@ -3246,6 +3350,17 @@ function initEvents() {
   $("chatForm")?.addEventListener("submit", event => {
     event.preventDefault();
     sendMessage($("prompt")?.value || "");
+  });
+
+  $("prompt")?.addEventListener("paste", event => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const images = items
+      .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+    if (!images.length) return;
+    addSelectedFiles(images);
+    toast(images.length === 1 ? "Скриншот добавлен к сообщению." : "Изображения добавлены к сообщению.");
   });
 
   $("prompt")?.addEventListener("keydown", event => {
@@ -3531,6 +3646,11 @@ function installPinskUiFixes() {
       bottom: 112px;
       width: 44px;
       height: 44px;
+      left: 50%;
+      right: auto;
+      bottom: 218px;
+      width: 36px;
+      height: 36px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -3544,6 +3664,7 @@ function installPinskUiFixes() {
       visibility: hidden;
       pointer-events: none;
       transform: translateY(8px);
+      transform: translate(-50%, 8px);
       transition: opacity .18s ease, transform .18s ease, visibility .18s ease, background .18s ease;
       backdrop-filter: blur(10px);
     }
@@ -3553,6 +3674,7 @@ function installPinskUiFixes() {
       visibility: visible;
       pointer-events: auto;
       transform: translateY(0);
+      transform: translate(-50%, 0);
     }
 
     .pinsk-scroll-bottom:hover {
@@ -4012,6 +4134,36 @@ function installPinskUiFixes() {
       display: none !important;
     }
 
+    /* Two tidy composer rows: attachment/reasoning, then image/microphone. */
+    .composer-control-layout {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .composer-control-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .composer-control-row .tool-button,
+    .composer-control-row .pinsk-image-mode {
+      white-space: nowrap;
+    }
+
+    .composer-control-row .voice-inline-button {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
+      margin: 0 2px;
+    }
+
     /* Кнопка генерации */
     .pinsk-image-mode {
       min-height: 40px;
@@ -4224,6 +4376,11 @@ function installPinskUiFixes() {
         bottom: 92px;
         width: 42px;
         height: 42px;
+        left: 50%;
+        right: auto;
+        bottom: 218px;
+        width: 36px;
+        height: 36px;
       }
 
       .voice-inline-button {
@@ -4261,6 +4418,10 @@ function installPinskUiFixes() {
     scrollContainer.dataset.pinskScrollBound = "true";
     scrollContainer.addEventListener("scroll", updateScrollToBottomButton, { passive: true });
   }
+  if (!window.pinskScrollResizeBound) {
+    window.pinskScrollResizeBound = true;
+    window.addEventListener("resize", updateScrollToBottomButton, { passive: true });
+  }
 
   updateScrollToBottomButton();
 }
@@ -4274,12 +4435,14 @@ async function init() {
 
   installPinskUiFixes();
   installUITranslations();
+  installInterfaceTranslations();
 
   // Создаём единственный экран Drag & Drop.
   installDragAndDrop();
   installStudioNavigation();
 
   initEvents();
+  installVoiceButton();
   installImageModeButton();
   renderAttachmentPreview();
   updateProfile();
