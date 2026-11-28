@@ -2915,6 +2915,7 @@ app.post(
 
 
 
+
 // ==========================================
 // DESIGN STUDIO — WEBSITE GENERATION
 // ==========================================
@@ -2958,7 +2959,10 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     }
 
-    // Разбор ответа Gemini: JSON или обычный HTML.
+    // ==========================================
+    // PARSE DESIGN STUDIO RESPONSE
+    // ==========================================
+
     function parseStudioProject(raw) {
       let source = String(raw || "").trim();
 
@@ -2969,26 +2973,44 @@ app.post("/api/design/generate", auth, async (req, res) => {
         .replace(/\s*```$/i, "")
         .trim();
 
-      // Вариант 1: чистый JSON.
-      try {
-        const parsed = JSON.parse(source);
+      function validProject(value) {
+        if (typeof value === "string") {
+          try {
+            return validProject(JSON.parse(value));
+          } catch {
+            return null;
+          }
+        }
 
         if (
-          parsed &&
-          typeof parsed === "object" &&
-          !Array.isArray(parsed) &&
-          typeof parsed.html === "string" &&
-          parsed.html.trim()
+          !value ||
+          typeof value !== "object" ||
+          Array.isArray(value)
         ) {
-          return {
-            html: parsed.html,
-            css: typeof parsed.css === "string" ? parsed.css : "",
-            js: typeof parsed.js === "string" ? parsed.js : ""
-          };
+          return null;
         }
+
+        if (
+          typeof value.html !== "string" ||
+          !value.html.trim()
+        ) {
+          return null;
+        }
+
+        return {
+          html: value.html,
+          css: typeof value.css === "string" ? value.css : "",
+          js: typeof value.js === "string" ? value.js : ""
+        };
+      }
+
+      // 1. Обычный JSON.
+      try {
+        const parsed = validProject(JSON.parse(source));
+        if (parsed) return parsed;
       } catch {}
 
-      // Вариант 2: JSON внутри пояснений.
+      // 2. JSON внутри пояснений.
       let depth = 0;
       let start = -1;
       let inString = false;
@@ -3019,23 +3041,11 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
           if (depth === 0 && start !== -1) {
             try {
-              const parsed = JSON.parse(
-                source.slice(start, i + 1)
+              const parsed = validProject(
+                JSON.parse(source.slice(start, i + 1))
               );
 
-              if (
-                parsed &&
-                typeof parsed === "object" &&
-                !Array.isArray(parsed) &&
-                typeof parsed.html === "string" &&
-                parsed.html.trim()
-              ) {
-                return {
-                  html: parsed.html,
-                  css: typeof parsed.css === "string" ? parsed.css : "",
-                  js: typeof parsed.js === "string" ? parsed.js : ""
-                };
-              }
+              if (parsed) return parsed;
             } catch {}
 
             start = -1;
@@ -3043,18 +3053,88 @@ app.post("/api/design/generate", auth, async (req, res) => {
         }
       }
 
-      // Вариант 3: Gemini вернул непосредственно HTML.
+      // 3. Попытка разобрать отдельные JSON-строки.
+      function readJsonString(text, position) {
+        if (position < 0 || text[position] !== '"') {
+          return null;
+        }
+
+        let escaped = false;
+
+        for (let i = position + 1; i < text.length; i++) {
+          const char = text[i];
+
+          if (escaped) {
+            escaped = false;
+          } else if (char === "\\") {
+            escaped = true;
+          } else if (char === '"') {
+            try {
+              return JSON.parse(text.slice(position, i + 1));
+            } catch {
+              return null;
+            }
+          }
+        }
+
+        return null;
+      }
+
+      const cssMatches = [
+        ...source.matchAll(/["']css["']\s*:\s*"/g)
+      ];
+
+      const jsMatches = [
+        ...source.matchAll(/["']js["']\s*:\s*"/g)
+      ];
+
+      if (cssMatches.length || jsMatches.length) {
+        const cssPosition = cssMatches.length
+          ? cssMatches[cssMatches.length - 1].index +
+            cssMatches[cssMatches.length - 1][0].length - 1
+          : -1;
+
+        const jsPosition = jsMatches.length
+          ? jsMatches[jsMatches.length - 1].index +
+            jsMatches[jsMatches.length - 1][0].length - 1
+          : -1;
+
+        const htmlEnd = cssMatches.length
+          ? cssMatches[cssMatches.length - 1].index
+          : jsMatches[jsMatches.length - 1].index;
+
+        let html = source.slice(0, htmlEnd).trim();
+
+        html = html
+          .replace(/^\{\s*["']html["']\s*:\s*"/i, "")
+          .replace(/["']\s*,?\s*$/i, "")
+          .trim();
+
+        const css = cssPosition >= 0
+          ? readJsonString(source, cssPosition) || ""
+          : "";
+
+        const js = jsPosition >= 0
+          ? readJsonString(source, jsPosition) || ""
+          : "";
+
+        if (html && (css || js)) {
+          return { html, css, js };
+        }
+      }
+
+      // 4. Обычный HTML с тегами style и script.
       const htmlStart = source.search(
         /<!doctype\s+html|<html[\s>]|<body[\s>]|<[a-z][a-z0-9-]*[\s>]/i
       );
 
       if (htmlStart !== -1) {
-        let htmlSource = source.slice(htmlStart);
+        let html = source.slice(htmlStart);
 
         const cssParts = [];
         const jsParts = [];
 
-        htmlSource = htmlSource.replace(
+        html = html.replace(
           /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
           (_, css) => {
             cssParts.push(css);
@@ -3062,7 +3142,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
           }
         );
 
-        htmlSource = htmlSource.replace(
+        html = html.replace(
           /<script\b[^>]*>([\s\S]*?)<\/script>/gi,
           (_, js) => {
             jsParts.push(js);
@@ -3070,12 +3150,12 @@ app.post("/api/design/generate", auth, async (req, res) => {
           }
         );
 
-        const bodyMatch = htmlSource.match(
+        const body = html.match(
           /<body\b[^>]*>([\s\S]*?)<\/body>/i
         );
 
         return {
-          html: bodyMatch ? bodyMatch[1] : htmlSource,
+          html: body ? body[1] : html,
           css: cssParts.join("\n"),
           js: jsParts.join("\n")
         };
@@ -3083,6 +3163,10 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
       return null;
     }
+
+    // ==========================================
+    // GEMINI PROMPT
+    // ==========================================
 
     const systemPrompt =
       "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
@@ -3094,7 +3178,12 @@ app.post("/api/design/generate", auth, async (req, res) => {
       "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
       "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
       "Код должен работать автономно в sandbox iframe. Добавляй доступность, адаптивность и интерактивность. " +
-      "Все текстовые значения JSON должны быть корректно экранированы.";
+      "Все текстовые значения JSON должны быть корректно экранированы. " +
+      "Не помещай CSS или JavaScript внутрь HTML-строки. " +
+      "Не используй Markdown-ссылки в коде. " +
+      "Не заменяй символы CSS обратными слешами. " +
+      "Заполни все три поля: html, css и js. " +
+      "Если интерактивность не нужна, верни пустую строку js, но обязательно создай полный CSS.";
 
     let answer = await askAI([
       {
@@ -3109,7 +3198,10 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
     let generated = parseStudioProject(answer);
 
-    // Повторная попытка, если формат не распознан.
+    // ==========================================
+    // RETRY IF RESPONSE FORMAT IS INVALID
+    // ==========================================
+
     if (!generated || !generated.html.trim()) {
       console.warn(
         "Design Studio: ответ Gemini имеет неверный формат. Повторная генерация."
@@ -3125,6 +3217,9 @@ app.post("/api/design/generate", auth, async (req, res) => {
             "Верни только один корректный JSON-объект без Markdown и пояснений. " +
             "Обязательные ключи: html, css, js. Все три значения должны быть строками. " +
             "html — содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
+            "Не помещай CSS и JavaScript внутрь HTML. " +
+            "Не используй Markdown-ссылки и обратные слеши вместо CSS-символов. " +
+            "Обязательно заполни html и css. js может быть пустой строкой. " +
             "Корректно экранируй кавычки, обратные слеши и переносы строк внутри JSON."
         },
         {
@@ -3150,6 +3245,10 @@ app.post("/api/design/generate", auth, async (req, res) => {
       );
     }
 
+    // ==========================================
+    // FINAL PROJECT DATA
+    // ==========================================
+
     const html = String(generated.html || "").slice(0, 120000);
     const css = String(generated.css || "").slice(0, 120000);
     const js = String(generated.js || "").slice(0, 120000);
@@ -3159,6 +3258,12 @@ app.post("/api/design/generate", auth, async (req, res) => {
         "ИИ не создал HTML-разметку. Попробуй уточнить запрос."
       );
     }
+
+    console.log("Design Studio: проект разобран", {
+      htmlLength: html.length,
+      cssLength: css.length,
+      jsLength: js.length
+    });
 
     return res.json({
       success: true,
@@ -3190,7 +3295,6 @@ app.post("/api/design/generate", auth, async (req, res) => {
     });
   }
 });
-
 
 // ==========================================
 // DATA ANALYSIS
