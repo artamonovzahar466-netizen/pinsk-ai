@@ -36,6 +36,7 @@ let currentChatId = null;
 let currentPage = "chat";
 let usageData = null;
 let isSending = false;
+let activeRequestController = null;
 const APP_LANGUAGES = {
   "ru-RU": "Русский",
   "kk-KZ": "Қазақша",
@@ -1224,6 +1225,12 @@ function updateScrollToBottomButton() {
     "visible",
     chatIsActive && distanceToBottom > 220
   );
+
+  const composerArea = document.querySelector(".composer-area");
+  if (composerArea) {
+    const composerTop = composerArea.getBoundingClientRect().top;
+    button.style.bottom = `${Math.max(12, window.innerHeight - composerTop + 8)}px`;
+  }
 }
 
 function renderMessage(role, content, options = {}) {
@@ -1371,9 +1378,26 @@ function setSendingState(value) {
 
   const sendButton = $("sendButton");
   const imageButton = $("imageModeButton");
+  const form = $("chatForm");
+  let stopButton = $("stopGenerationButton");
+
+  if (form && !stopButton && sendButton) {
+    stopButton = document.createElement("button");
+    stopButton.type = "button";
+    stopButton.id = "stopGenerationButton";
+    stopButton.className = "stop-generation-button";
+    stopButton.textContent = "■";
+    stopButton.title = "Остановить ответ";
+    stopButton.setAttribute("aria-label", "Остановить ответ");
+    stopButton.addEventListener("click", () => {
+      if (activeRequestController) activeRequestController.abort();
+    });
+    sendButton.insertAdjacentElement("afterend", stopButton);
+  }
 
   if (sendButton) sendButton.disabled = value;
   if (imageButton) imageButton.disabled = value;
+  if (stopButton) stopButton.hidden = !value || !activeRequestController;
 }
 
 function createLoadingMessage(text = "Pinsk думает") {
@@ -1412,6 +1436,7 @@ async function sendMessage(value, options = {}) {
     return;
   }
 
+  activeRequestController = options.voiceSession ? null : new AbortController();
   setSendingState(true);
 
   if (currentPage === "chat" && $("welcome")) {
@@ -1432,6 +1457,7 @@ async function sendMessage(value, options = {}) {
     imageMode ? "Pinsk создаёт изображение..." :
       files.length ? "Pinsk изучает вложения" : "Pinsk думает"
   );
+  setSendingState(true);
 
   // Keep one calm status instead of cycling through several phrases.
   // This does not imply that the model is progressing through separate stages.
@@ -1440,7 +1466,8 @@ async function sendMessage(value, options = {}) {
     if (imageMode) {
       const data = await api("/api/images/generate", {
         method: "POST",
-        body: JSON.stringify({ prompt: message, language })
+        body: JSON.stringify({ prompt: message, language }),
+        signal: activeRequestController?.signal
       });
 
       loading?.remove();
@@ -1493,7 +1520,8 @@ async function sendMessage(value, options = {}) {
       } else {
         data = await api("/api/chat", {
           method: "POST",
-          body: formData
+          body: formData,
+          signal: activeRequestController?.signal
         });
       }
 
@@ -1508,7 +1536,7 @@ async function sendMessage(value, options = {}) {
         if (options.speak) await speakAnswer(answer);
       } else {
         renderMessage("assistant", answer);
-        if (options.speak) speakAnswer(answer);
+        // В обычном текстовом чате ответы не озвучиваются автоматически.
       }
 
       await loadUsage();
@@ -1519,17 +1547,20 @@ async function sendMessage(value, options = {}) {
 
   } catch (error) {
     loading?.remove();
-    if (options.voiceSession) {
+    if (error.name === "AbortError" && !options.voiceSession) {
+      toast("Ответ остановлен.");
+    } else if (options.voiceSession) {
       setVoiceStatus("Ошибка голосового ответа: " + error.message, "error");
     } else {
       renderMessage(
         "assistant",
         "Не удалось выполнить запрос: " + error.message
       );
+      toast(error.message);
     }
-    toast(error.message);
 
   } finally {
+    activeRequestController = null;
     setSendingState(false);
     if (options.voiceSession) {
       voiceBusy = false;
@@ -1609,8 +1640,8 @@ function installImageModeButton() {
 
       if (attachButton) firstRow.appendChild(attachButton);
       if (reasoningButton) firstRow.appendChild(reasoningButton);
-      secondRow.appendChild(button);
       if (voiceButton) secondRow.appendChild(voiceButton);
+      secondRow.appendChild(button);
     }
   } else {
     form.appendChild(button);
@@ -2925,22 +2956,47 @@ function startInlineVoice() {
   try {
     const instance = new SpeechRecognition();
     recognition = instance;
+    let finalTranscript = "";
     instance.lang = language;
-    instance.continuous = false;
-    instance.interimResults = false;
-    instance.onstart = () => $("voiceButton")?.classList.add("recording");
+    instance.continuous = true;
+    instance.interimResults = true;
+    instance.onstart = () => {
+      const button = $("voiceButton");
+      button?.classList.add("recording");
+      if (button) {
+        button.textContent = "■";
+        button.title = "Остановить запись";
+        button.setAttribute("aria-label", "Остановить запись");
+      }
+      toast("Идёт запись. Нажми ■, чтобы остановить.");
+    };
     instance.onresult = event => {
-      const spoken = event.results[0][0].transcript;
-      if ($("prompt")) $("prompt").value = spoken;
-      sendMessage(spoken, { speak: true });
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += transcript + " ";
+        else interim += transcript;
+      }
+      const prompt = $("prompt");
+      if (prompt) prompt.value = (finalTranscript + interim).trim();
     };
     instance.onerror = event => {
       if (event.error === "not-allowed") toast("Разреши доступ к микрофону в браузере.");
-      else toast("Не удалось распознать речь.");
+      else if (event.error !== "aborted" && event.error !== "no-speech") toast("Не удалось распознать речь.");
     };
     instance.onend = () => {
       if (recognition === instance) recognition = null;
-      $("voiceButton")?.classList.remove("recording");
+      const button = $("voiceButton");
+      button?.classList.remove("recording");
+      if (button) {
+        button.textContent = "🎙";
+        button.title = "Голосовой ввод";
+        button.setAttribute("aria-label", "Голосовой ввод");
+      }
+      if (finalTranscript.trim()) {
+        toast("Текст распознан. Проверь его и нажми отправить.");
+        $("prompt")?.focus();
+      }
     };
     instance.start();
   } catch (error) {
@@ -2949,13 +3005,10 @@ function startInlineVoice() {
     toast("Не удалось запустить микрофон.");
   }
 }
-
 function stopInlineVoice() {
   if (!recognition) return;
   const instance = recognition;
-  recognition = null;
   try { instance.stop(); } catch (_) {}
-  $("voiceButton")?.classList.remove("recording");
 }
 
 function startVoiceRecognition() {
@@ -4173,6 +4226,10 @@ function installPinskUiFixes() {
     scrollContainer.dataset.pinskScrollBound = "true";
     scrollContainer.addEventListener("scroll", updateScrollToBottomButton, { passive: true });
   }
+  if (!window.pinskScrollResizeBound) {
+    window.pinskScrollResizeBound = true;
+    window.addEventListener("resize", updateScrollToBottomButton, { passive: true });
+  }
 
   updateScrollToBottomButton();
 }
@@ -4226,3 +4283,4 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
+
