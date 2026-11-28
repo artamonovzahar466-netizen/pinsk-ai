@@ -2075,7 +2075,7 @@ function convertToGeminiContents(messages) {
     .filter(message => message.parts.length > 0);
 }
 
-async function askAI(messages) {
+async function askAI(messages, options = {}) {
   const systemText = messages
     .filter(message => message.role === "system")
     .map(message => typeof message.content === "string"
@@ -2121,7 +2121,8 @@ async function askAI(messages) {
             contents,
             generationConfig: {
               // Website source is much longer than a normal chat reply.
-              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 2048
+              maxOutputTokens: /senior frontend-разработчик/i.test(systemText) ? 8192 : 2048,
+              ...(options.json ? { responseMimeType: "application/json" } : {})
             }
           }),
           signal
@@ -2161,7 +2162,7 @@ async function askAI(messages) {
 
       return answer;
     },
-    { maxAttempts: 5 }
+    { maxAttempts: 5, signal: options.signal }
   );
 }
 
@@ -2184,6 +2185,10 @@ app.post(
     let filesReserved = false;
 
     const files = req.files || [];
+    const generationController = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) generationController.abort();
+    });
 
     try {
       const message = String(req.body.message || "").trim();
@@ -2513,7 +2518,13 @@ app.post(
           content: files.length > 0 ? fullSystemPrompt : compactSystemPrompt
         },
         ...history
-      ]);
+      ], { signal: generationController.signal });
+
+      if (generationController.signal.aborted) {
+        const abortError = new Error("Запрос остановлен пользователем.");
+        abortError.name = "AbortError";
+        throw abortError;
+      }
 
       await pool.query(`
         INSERT INTO messages (conversation_id, role, content)
@@ -2550,6 +2561,7 @@ app.post(
         await releaseCounter(userId, "files", files.length)
           .catch(() => {});
       }
+      if (generationController.signal.aborted || res.destroyed) return;
 
       const status = error instanceof multer.MulterError
         ? 400
@@ -2571,7 +2583,7 @@ app.post(
 // IMAGE PROMPT TRANSLATION
 // ==========================================
 
-async function translateImagePrompt(prompt, language = "ru-RU") {
+async function translateImagePrompt(prompt, language = "ru-RU", signal = null) {
   const source = String(prompt || "").trim();
 
   if (!source) {
@@ -2641,9 +2653,11 @@ async function translateImagePrompt(prompt, language = "ru-RU") {
         }
 
         return translated;
-      }
+      },
+      { signal }
     );
   } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
     // Не блокируем создание изображения из-за временной перегрузки Gemini.
     console.warn(
       "Pinsk: перевод промпта через Gemini недоступен, отправляем исходное описание:",
@@ -2669,7 +2683,7 @@ async function translateImagePrompt(prompt, language = "ru-RU") {
 // CLOUDFLARE WORKERS AI — IMAGE GENERATION
 // ==========================================
 
-async function generateCloudflareImage(prompt) {
+async function generateCloudflareImage(prompt, signal = null) {
   const apiToken = String(
     process.env.CLOUDFLARE_API_TOKEN || ""
   ).trim();
@@ -2692,21 +2706,33 @@ async function generateCloudflareImage(prompt) {
     throw error;
   }
 
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${IMAGE_MODEL}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        prompt: String(prompt).slice(0, 2048),
-        steps: 4
-      }),
-      signal: AbortSignal.timeout(180000)
-    }
-  );
+  const imageRequestController = new AbortController();
+  const imageRequestTimeout = setTimeout(() => imageRequestController.abort(), 180000);
+  const abortImageRequest = () => imageRequestController.abort();
+  if (signal?.aborted) imageRequestController.abort();
+  else signal?.addEventListener("abort", abortImageRequest, { once: true });
+
+  let response;
+  try {
+    response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${IMAGE_MODEL}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          prompt: String(prompt).slice(0, 2048),
+          steps: 4
+        }),
+        signal: imageRequestController.signal
+      }
+    );
+  } finally {
+    clearTimeout(imageRequestTimeout);
+    signal?.removeEventListener("abort", abortImageRequest);
+  }
 
   const data = await response.json().catch(() => ({}));
 
@@ -2753,6 +2779,10 @@ async function generateCloudflareImage(prompt) {
 
 async function imageGenerationHandler(req, res) {
   let reserved = false;
+  const generationController = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) generationController.abort();
+  });
 
   try {
     const prompt = String(
@@ -2794,8 +2824,13 @@ async function imageGenerationHandler(req, res) {
       }
     }
 
-    const imagePrompt = await translateImagePrompt(prompt, language);
-    const result = await generateCloudflareImage(imagePrompt);
+    const imagePrompt = await translateImagePrompt(prompt, language, generationController.signal);
+    const result = await generateCloudflareImage(imagePrompt, generationController.signal);
+    if (generationController.signal.aborted) {
+      const abortError = new Error("Запрос остановлен пользователем.");
+      abortError.name = "AbortError";
+      throw abortError;
+    }
 
     res.json({
       success: true,
@@ -2816,6 +2851,7 @@ async function imageGenerationHandler(req, res) {
       await releaseCounter(req.user.id, "images", 1)
         .catch(() => {});
     }
+    if (generationController.signal.aborted || res.destroyed) return;
 
     const status =
       error.name === "TimeoutError" ||
@@ -2852,8 +2888,51 @@ app.post(
 // DESIGN STUDIO — WEBSITE GENERATION
 // ==========================================
 
+function parseWebsiteProjectJson(raw) {
+  const text = String(raw || "").trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  // Fallback: extract the first complete JSON object while respecting braces
+  // inside quoted HTML/CSS/JS strings and escaped quote characters.
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch {}
+        start = -1;
+      }
+    }
+  }
+  throw new Error("Модель вернула некорректный JSON проекта.");
+}
+
 app.post("/api/design/generate", auth, async (req, res) => {
   let messageReserved = false;
+  const generationController = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded) generationController.abort();
+  });
 
   try {
     const prompt = String(req.body.prompt || "").trim();
@@ -2882,7 +2961,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     }
 
-    const answer = await askAI([
+    const websiteMessages = [
       {
         role: "system",
         content:
@@ -2900,37 +2979,52 @@ app.post("/api/design/generate", auth, async (req, res) => {
         role: "user",
         content: "Создай сайт по этому заданию.\n\n" + prompt
       }
-    ]);
+    ];
 
+    const answer = await askAI(websiteMessages, { json: true, signal: generationController.signal });
+    if (generationController.signal.aborted) {
+      const abortError = new Error("Запрос остановлен пользователем.");
+      abortError.name = "AbortError";
+      throw abortError;
+    }
     let generated;
     try {
-      const cleaned = String(answer)
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
-        .trim();
-      const start = cleaned.indexOf("{");
-      const end = cleaned.lastIndexOf("}");
-      if (start < 0 || end <= start) throw new Error("JSON not found");
-      generated = JSON.parse(cleaned.slice(start, end + 1));
-    } catch {
-      throw new Error("ИИ вернул некорректный формат проекта. Повтори запрос.");
+      generated = parseWebsiteProjectJson(answer);
+    } catch (parseError) {
+      // One constrained repair attempt prevents a formatting hiccup from
+      // discarding an otherwise successful website generation.
+      const repaired = await askAI([
+        ...websiteMessages,
+        { role: "assistant", content: String(answer || "") },
+        { role: "user", content: "Исправь свой предыдущий ответ. Верни только валидный JSON-объект с тремя строковыми полями html, css и js. Не добавляй Markdown, комментарии или пояснения. Сохрани исходное задание и весь полезный код." }
+      ], { json: true, signal: generationController.signal });
+      generated = parseWebsiteProjectJson(repaired);
+    }
+    if (generationController.signal.aborted) {
+      const abortError = new Error("Запрос остановлен пользователем.");
+      abortError.name = "AbortError";
+      throw abortError;
     }
 
+    if (!generated || typeof generated !== "object" || Array.isArray(generated)) {
+      throw new Error("Модель вернула не объект проекта.");
+    }
     const html = String(generated.html || "").slice(0, 120000);
     const css = String(generated.css || "").slice(0, 120000);
     const js = String(generated.js || "").slice(0, 120000);
 
     if (!html.trim()) {
-      throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
+      throw new Error("ИИ не вернул HTML-разметку сайта. Попробуй повторить запрос или уточнить описание.");
     }
 
     return res.json({ success: true, html, css, js });
 
   } catch (error) {
-    console.error("Design Studio generation error:", error.message);
+    console.error("Pinsk website builder generation error:", error.message);
     if (messageReserved) {
       await releaseMessage(req.user.id).catch(() => {});
     }
+    if (generationController.signal.aborted || res.destroyed) return;
 
     const status = [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
     return res.status(status).json({
