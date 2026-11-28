@@ -2914,6 +2914,7 @@ app.post(
 );
 
 
+
 // ==========================================
 // DESIGN STUDIO — WEBSITE GENERATION
 // ==========================================
@@ -2924,21 +2925,30 @@ app.post("/api/design/generate", auth, async (req, res) => {
   try {
     const prompt = String(req.body.prompt || "").trim();
     const language = String(req.body.language || "ru-RU");
-    const designLanguageInstruction = `Весь видимый текст сайта (заголовки, кнопки, меню, подписи, сообщения, формы и примеры) пиши на ${AI_LANGUAGE_NAMES[language] || "русском языке"}. Не используй английский для текста интерфейса, если выбран другой язык. Имена брендов и технические идентификаторы не переводи.`;
+
+    const designLanguageInstruction =
+      `Весь видимый текст сайта (заголовки, кнопки, меню, подписи, сообщения, формы и примеры) пиши на ${AI_LANGUAGE_NAMES[language] || "русском языке"}. Не используй английский для текста интерфейса, если выбран другой язык. Имена брендов и технические идентификаторы не переводи.`;
 
     if (!prompt) {
-      return res.status(400).json({ error: "Опиши сайт, который нужно создать." });
+      return res.status(400).json({
+        error: "Опиши сайт, который нужно создать."
+      });
     }
 
     if (prompt.length > 5000) {
-      return res.status(400).json({ error: "Описание сайта не должно превышать 5000 символов." });
+      return res.status(400).json({
+        error: "Описание сайта не должно превышать 5000 символов."
+      });
     }
 
     const limits = limitsFor(req.user);
+
     if (limits.messages !== Infinity) {
       messageReserved = await reserveMessage(req.user.id);
+
       if (!messageReserved) {
         const usage = await getUsage(req.user.id);
+
         return res.status(429).json({
           error: "Дневной лимит сообщений исчерпан.",
           code: "DAILY_LIMIT_REACHED",
@@ -2948,39 +2958,37 @@ app.post("/api/design/generate", auth, async (req, res) => {
       }
     }
 
-    const answer = await askAI([
-      {
-        role: "system",
-        content:
-          "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
-          designLanguageInstruction + " " +
-          "Создавай законченные, адаптивные, визуально качественные сайты. " +
-          "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
-          "html — только содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
-          "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
-          "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
-          "Код должен работать автономно в sandbox iframe. Добавляй доступность, адаптивность и интерактивность. " +
-          "Все текстовые значения JSON должны быть корректно экранированы."
-      },
-      {
-        role: "user",
-        content: "Создай сайт по этому заданию.\n\n" + prompt
-      }
-    ]);
-
-    // Gemini иногда оборачивает JSON в Markdown или добавляет пояснение.
-    // Извлекаем JSON-объект с учётом вложенных скобок и строк.
+    // Разбор ответа Gemini: JSON или обычный HTML.
     function parseStudioProject(raw) {
-      const source = String(raw || "").trim();
+      let source = String(raw || "").trim();
+
       if (!source) return null;
 
+      source = source
+        .replace(/^```(?:json|html)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+
+      // Вариант 1: чистый JSON.
       try {
         const parsed = JSON.parse(source);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          return parsed;
+
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          typeof parsed.html === "string" &&
+          parsed.html.trim()
+        ) {
+          return {
+            html: parsed.html,
+            css: typeof parsed.css === "string" ? parsed.css : "",
+            js: typeof parsed.js === "string" ? parsed.js : ""
+          };
         }
       } catch {}
 
+      // Вариант 2: JSON внутри пояснений.
       let depth = 0;
       let start = -1;
       let inString = false;
@@ -2997,6 +3005,7 @@ app.post("/api/design/generate", auth, async (req, res) => {
           } else if (char === '"') {
             inString = false;
           }
+
           continue;
         }
 
@@ -3010,24 +3019,101 @@ app.post("/api/design/generate", auth, async (req, res) => {
 
           if (depth === 0 && start !== -1) {
             try {
-              const parsed = JSON.parse(source.slice(start, i + 1));
-              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                return parsed;
+              const parsed = JSON.parse(
+                source.slice(start, i + 1)
+              );
+
+              if (
+                parsed &&
+                typeof parsed === "object" &&
+                !Array.isArray(parsed) &&
+                typeof parsed.html === "string" &&
+                parsed.html.trim()
+              ) {
+                return {
+                  html: parsed.html,
+                  css: typeof parsed.css === "string" ? parsed.css : "",
+                  js: typeof parsed.js === "string" ? parsed.js : ""
+                };
               }
             } catch {}
+
             start = -1;
           }
         }
       }
 
+      // Вариант 3: Gemini вернул непосредственно HTML.
+      const htmlStart = source.search(
+        /<!doctype\s+html|<html[\s>]|<body[\s>]|<[a-z][a-z0-9-]*[\s>]/i
+      );
+
+      if (htmlStart !== -1) {
+        let htmlSource = source.slice(htmlStart);
+
+        const cssParts = [];
+        const jsParts = [];
+
+        htmlSource = htmlSource.replace(
+          /<style\b[^>]*>([\s\S]*?)<\/style>/gi,
+          (_, css) => {
+            cssParts.push(css);
+            return "";
+          }
+        );
+
+        htmlSource = htmlSource.replace(
+          /<script\b[^>]*>([\s\S]*?)<\/script>/gi,
+          (_, js) => {
+            jsParts.push(js);
+            return "";
+          }
+        );
+
+        const bodyMatch = htmlSource.match(
+          /<body\b[^>]*>([\s\S]*?)<\/body>/i
+        );
+
+        return {
+          html: bodyMatch ? bodyMatch[1] : htmlSource,
+          css: cssParts.join("\n"),
+          js: jsParts.join("\n")
+        };
+      }
+
       return null;
     }
 
+    const systemPrompt =
+      "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
+      designLanguageInstruction + " " +
+      "Создавай законченные, адаптивные, визуально качественные сайты. " +
+      "Верни строго один JSON-объект без Markdown и пояснений, с ключами html, css, js. " +
+      "Все три значения должны быть строками. " +
+      "html — содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
+      "Не используй внешние библиотеки, CDN, внешние шрифты и сетевые запросы. " +
+      "Все изображения подключай только через безопасные публичные URL или CSS-градиенты; не выдумывай локальные файлы. " +
+      "Код должен работать автономно в sandbox iframe. Добавляй доступность, адаптивность и интерактивность. " +
+      "Все текстовые значения JSON должны быть корректно экранированы.";
+
+    let answer = await askAI([
+      {
+        role: "system",
+        content: systemPrompt
+      },
+      {
+        role: "user",
+        content: "Создай сайт по этому заданию.\n\n" + prompt
+      }
+    ]);
+
     let generated = parseStudioProject(answer);
 
-    // Если ответ не содержит пригодной HTML-разметки, повторяем запрос.
-    if (!generated || typeof generated.html !== "string" || !generated.html.trim()) {
-      console.warn("Design Studio: ответ Gemini имеет неверный формат. Повторная генерация.");
+    // Повторная попытка, если формат не распознан.
+    if (!generated || !generated.html.trim()) {
+      console.warn(
+        "Design Studio: ответ Gemini имеет неверный формат. Повторная генерация."
+      );
 
       const retryAnswer = await askAI([
         {
@@ -3035,22 +3121,33 @@ app.post("/api/design/generate", auth, async (req, res) => {
           content:
             "Ты — senior frontend-разработчик и UI/UX-дизайнер Pinsk AI. " +
             designLanguageInstruction + " " +
-            "Создай законченный адаптивный сайт. Верни только один корректный JSON-объект без Markdown и пояснений. " +
+            "Создай законченный адаптивный сайт. " +
+            "Верни только один корректный JSON-объект без Markdown и пояснений. " +
             "Обязательные ключи: html, css, js. Все три значения должны быть строками. " +
             "html — содержимое body без тегов style и script; css — полный CSS; js — JavaScript без тегов script. " +
             "Корректно экранируй кавычки, обратные слеши и переносы строк внутри JSON."
         },
         {
           role: "user",
-          content: "Повтори создание сайта по этому заданию. В предыдущем ответе формат оказался некорректным. Верни только валидный JSON.\n\n" + prompt
+          content:
+            "Повтори создание сайта по этому заданию. " +
+            "Верни только валидный JSON с ключами html, css, js.\n\n" +
+            prompt
         }
       ]);
 
       generated = parseStudioProject(retryAnswer);
     }
 
-    if (!generated || typeof generated.html !== "string" || !generated.html.trim()) {
-      throw new Error("Gemini дважды вернул ответ без корректной HTML-разметки. Попробуй повторить запрос.");
+    if (!generated || !generated.html.trim()) {
+      console.error(
+        "Design Studio: Gemini не вернул распознаваемый HTML. Ответ:",
+        String(answer || "").slice(0, 1500)
+      );
+
+      throw new Error(
+        "Gemini не вернул сайт в распознаваемом формате. Попробуй повторить запрос."
+      );
     }
 
     const html = String(generated.html || "").slice(0, 120000);
@@ -3058,21 +3155,37 @@ app.post("/api/design/generate", auth, async (req, res) => {
     const js = String(generated.js || "").slice(0, 120000);
 
     if (!html.trim()) {
-      throw new Error("ИИ не создал HTML-разметку. Попробуй уточнить запрос.");
+      throw new Error(
+        "ИИ не создал HTML-разметку. Попробуй уточнить запрос."
+      );
     }
 
-    return res.json({ success: true, html, css, js });
+    return res.json({
+      success: true,
+      html,
+      css,
+      js
+    });
 
   } catch (error) {
-    console.error("Design Studio generation error:", error.message);
+    console.error(
+      "Design Studio generation error:",
+      error.message
+    );
+
     if (messageReserved) {
       await releaseMessage(req.user.id).catch(() => {});
     }
 
-    const status = [429, 502, 503, 504, 529].includes(error.status) ? 503 : 500;
+    const status = [429, 502, 503, 504, 529].includes(error.status)
+      ? 503
+      : 500;
+
     return res.status(status).json({
       error: status === 503
-        ? "Gemini временно перегружен (HTTP " + String(error.status || 503) + "). Это не означает, что API-ключи недействительны. Сервер автоматически повторил запрос; попробуй ещё раз через минуту."
+        ? "Gemini временно перегружен (HTTP " +
+          String(error.status || 503) +
+          "). Это не означает, что API-ключи недействительны. Сервер автоматически повторил запрос; попробуй ещё раз через минуту."
         : error.message || "Не удалось создать сайт. Попробуй изменить описание."
     });
   }
